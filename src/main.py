@@ -17,6 +17,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from telegram.error import NetworkError
+
 from .bot import build_application
 from .config import settings
 from .db import init_db
@@ -24,6 +26,21 @@ from .elo_updater import update_elo_from_results
 from .notifier import send_startup_message, set_bot
 from .pipeline import run_once
 from .result_checker import check_anomaly_results
+
+
+class _TelegramNetworkFilter(logging.Filter):
+    """Сжимает сетевые ошибки Telegram polling до одной строки WARNING.
+
+    Без фильтра каждый обрыв сети генерирует ~139 строк стек-трейса.
+    Реальные ошибки (не NetworkError) пропускаются без изменений.
+    """
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info and isinstance(record.exc_info[1], NetworkError):
+            record.levelno = logging.WARNING
+            record.levelname = "WARNING "
+            record.exc_info = None
+            record.exc_text = None
+        return True
 
 
 def setup_logging() -> None:
@@ -38,9 +55,11 @@ def setup_logging() -> None:
         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
         handlers=handlers,
     )
-    # Убавляем шум httpx
+    # Убавляем шум httpx и apscheduler
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
+    # Telegram polling NetworkError → одна строка WARNING вместо стек-трейса
+    logging.getLogger("telegram.ext.Updater").addFilter(_TelegramNetworkFilter())
 
 
 async def main() -> None:
