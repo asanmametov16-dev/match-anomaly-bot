@@ -70,11 +70,13 @@ async def fetch_finished_matches(days_back: int = 2) -> list[FinishedMatch]:
         score = raw.get("score", {}).get("fullTime", {})
         home = score.get("home")
         away = score.get("away")
-        if home is None or away is None:
+        home_name = raw.get("homeTeam", {}).get("name")
+        away_name = raw.get("awayTeam", {}).get("name")
+        if home is None or away is None or home_name is None or away_name is None:
             continue
         matches.append(FinishedMatch(
-            home_team=raw["homeTeam"]["name"],
-            away_team=raw["awayTeam"]["name"],
+            home_team=home_name,
+            away_team=away_name,
             home_score=int(home),
             away_score=int(away),
             utc_date=datetime.fromisoformat(raw["utcDate"].replace("Z", "+00:00")),
