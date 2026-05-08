@@ -3,12 +3,70 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from .db import Anomaly, AnomalyOutcome, MatchResult, ResultNotification, SessionLocal
 from .notifier import send_result_message
 from .results_client import fetch_finished_matches, normalize_team_name
+
+# Минимальное среднее сходство имён команд для принятия совпадения.
+# 0.75 отсекает явно разные клубы, но пропускает варианты написания.
+_MATCH_THRESHOLD = 0.75
+
+
+def _fuzzy_find_result(
+    session: Session,
+    home: str,
+    away: str,
+    commence_time: datetime,
+) -> MatchResult | None:
+    """Нечёткий поиск результата по именам команд и дате.
+
+    Точный поиск по ключу ломается при любом расхождении имён между API.
+    Загружаем все MatchResult (таблица маленькая — сотни строк), фильтруем
+    по дате ±1 день и выбираем запись с наибольшим средним сходством имён.
+    """
+    norm_home = normalize_team_name(home)
+    norm_away = normalize_team_name(away)
+    match_date = commence_time.date()
+
+    all_results = session.execute(select(MatchResult)).scalars().all()
+
+    best_score = 0.0
+    best_result: MatchResult | None = None
+
+    for r in all_results:
+        # Дата закодирована в result_key как "YYYY-MM-DD|..."
+        try:
+            r_date = datetime.strptime(r.result_key.split("|")[0], "%Y-%m-%d").date()
+        except (ValueError, IndexError):
+            continue
+        if abs((r_date - match_date).days) > 1:
+            continue
+
+        r_home = normalize_team_name(r.home_team)
+        r_away = normalize_team_name(r.away_team)
+
+        score = (
+            SequenceMatcher(None, norm_home, r_home).ratio()
+            + SequenceMatcher(None, norm_away, r_away).ratio()
+        ) / 2
+
+        if score > best_score:
+            best_score = score
+            best_result = r
+
+    if best_score >= _MATCH_THRESHOLD:
+        log.debug("Fuzzy match %.2f: '%s vs %s' → '%s vs %s'",
+                  best_score, home, away,
+                  best_result.home_team, best_result.away_team)
+        return best_result
+
+    log.debug("Fuzzy match failed (best=%.2f) for '%s vs %s'", best_score, home, away)
+    return None
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +139,10 @@ async def check_anomaly_results() -> None:
             if session.get(ResultNotification, result_key) is not None:
                 continue  # уже отправляли
 
-            result = session.get(MatchResult, result_key)
+            first = match_anomalies[0]
+            result = _fuzzy_find_result(
+                session, first.home_team, first.away_team, first.commence_time
+            )
             if result is None:
                 continue  # результат не найден (лига вне football-data.org)
 
@@ -116,7 +177,6 @@ async def check_anomaly_results() -> None:
                 yes = sum(1 for c in confirmed_flags if c)
                 overall = yes > len(confirmed_flags) / 2
 
-            first = match_anomalies[0]
             await send_result_message(
                 home_team=first.home_team,
                 away_team=first.away_team,
