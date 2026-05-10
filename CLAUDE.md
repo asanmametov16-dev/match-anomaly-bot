@@ -22,11 +22,13 @@ src/
 ├── odds_client.py     # клиент The Odds API (h2h + totals + spreads)
 ├── results_client.py  # клиент football-data.org для результатов
 ├── elo.py             # Elo-рейтинг, fair_odds_1x2, нормализация имён
+├── elo_bootstrap.py   # разовая загрузка рейтингов с clubelo.com
 ├── elo_updater.py     # ежедневный джоб обновления Elo по результатам
-├── detectors.py       # 5 детекторов: spread, drift, synchronized, model_gap, exotic_spread
+├── probability.py     # утилиты: implied_prob, remove_overround, consensus_probabilities
+├── detectors.py       # 6 детекторов: spread, drift, synchronized, model_gap, exotic_spread, sharp_move
 ├── notifier.py        # отправка алертов в Telegram (использует общий Bot)
 ├── bot.py             # команды бота: /stats /recent /thresholds /elo
-└── pipeline.py        # один цикл: fetch → детект → save → alert (с дедупом)
+└── pipeline.py        # один цикл: fetch → фильтр → детект → save → alert
 ```
 
 ## Как запускать
@@ -84,11 +86,76 @@ python -m src.main
 - Авторизация команд бота: только `TELEGRAM_CHAT_ID` (см. `_is_authorized`).
 - Никаких `localStorage`/`sessionStorage` — это серверный код.
 
+## Архитектура анализа
+
+### Вероятности вместо коэффициентов
+
+Все детекторы работают с **маржа-свободными вероятностями** (margin-free
+probabilities), а не сырыми коэффициентами. Это позволяет честно сравнивать
+котировки разных букмекеров с разным overround.
+
+```
+implied_prob = 1 / odds              # сырая вероятность
+margin_free  = prob / sum(all_probs) # нормализация (remove_overround)
+```
+
+Реализация в `src/probability.py`: `implied_probability`, `remove_overround`,
+`probabilities_from_match`.
+
+### Веса букмекеров
+
+Sharp-конторы (Pinnacle, Betfair, SBObet, Matchbook) двигают рынок первыми
+и отражают реальный поток денег. Они получают вес `sharp_weight=1.0`.
+Остальные (soft/followers) — `default_weight=0.4`.
+
+`consensus_probabilities` строит **взвешенную медиану** по всем букмекерам.
+Взвешенная медиана — не взвешенное среднее: одиночный выброс (устаревшая
+котировка) не может сдвинуть консенсус дальше своего значения.
+
+`detect_synchronized` срабатывает только если среди синхронно двинувшихся
+контор есть хотя бы одна sharp — чисто follower-движение игнорируется.
+
+### Временны́е корзины (time buckets)
+
+Чем ближе к матчу, тем ниже пороги детекторов (больше чувствительность).
+Настраивается через `time_buckets_hours` и `time_bucket_multipliers` в `.env`:
+
+| До матча | Множитель | Смысл                          |
+|----------|-----------|-------------------------------|
+| < 6 ч    | ×0.70     | Активный рынок — ловим больше  |
+| 6–24 ч   | ×0.85     | Повышенная чуткость            |
+| 24–72 ч  | ×1.00     | Базовые пороги                 |
+| > 72 ч   | ×1.30     | Ранние котировки — шум выше    |
+
+### Скользящее окно дрейфа
+
+`detect_drift` сравнивает текущие вероятности с самым старым снимком
+в окне `drift_window_minutes` (по умолчанию 120 мин), а не с первым
+снимком за всю историю. Это убирает накопленный шум из далёкого прошлого.
+
+### Динамическая доля ничьих в Elo
+
+`fair_odds_1x2` вычисляет долю ничьих как функцию разности рейтингов:
+`draw_share = max(0.18, min(0.32, 0.30 - 0.0003 × |Δelo|))`.
+Чем равнее команды — тем выше вероятность ничьей.
+
 ## Тесты
 
-Тестов пока нет — это первая задача после установки. Самый понятный
-кандидат для покрытия — `detectors.py` (чистая логика без сети). Целевой
-стек: pytest. Тесты не должны делать сетевых запросов.
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 61 тест, 0 сетевых
+запросов — всё на синтетических данных и in-memory SQLite.
+
+```
+tests/
+├── conftest.py                      # dummy env vars для Settings()
+├── test_probability.py              # implied_prob, remove_overround, consensus
+├── test_detectors_spread.py         # detect_spread в процентных пунктах
+├── test_detectors_drift.py          # скользящее окно дрейфа
+├── test_detectors_synchronized.py   # sharp-фильтр для synchronized
+├── test_detectors_time_bucket.py    # временны́е корзины
+├── test_probability_weights.py      # веса букмекеров, weighted median
+├── test_elo_bootstrap.py            # загрузка рейтингов с clubelo.com
+└── test_elo_draw_share.py           # динамическая доля ничьих
+```
 
 ## Git-гигиена
 
@@ -108,10 +175,8 @@ python -m src.main
 
 ## Идеи для следующих задач (по приоритету)
 
-1. Тесты для `detectors.py` на синтетических `MatchOdds`.
-2. Фильтр «только матчи в ближайшие N часов» в `pipeline.py` — сэкономит
-   запросы к Odds API.
-3. Загрузка стартовых Elo-рейтингов с clubelo.com (опционально).
-4. Команда бота `/mute <hours>` — временно отключить алерты.
-5. ML-слой (XGBoost / Isolation Forest) поверх правил — когда накопится
+1. Команда бота `/mute <hours>` — временно отключить алерты.
+2. ML-слой (XGBoost / Isolation Forest) поверх правил — когда накопится
    2+ месяца истории срабатываний с разметкой результата.
+3. Персистентная дедупликация алертов (сейчас in-memory, сбрасывается при рестарте).
+4. Экспорт истории снимков в CSV/Parquet для офлайн-анализа.
