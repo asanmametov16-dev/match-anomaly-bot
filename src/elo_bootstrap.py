@@ -24,7 +24,7 @@ from .elo import _normalize
 
 log = logging.getLogger(__name__)
 
-CLUBELO_API = "http://api.clubelo.com/{date}/"
+CLUBELO_API = "http://api.clubelo.com/{date}"
 
 
 def fetch_and_load(
