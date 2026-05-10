@@ -4,7 +4,7 @@ All tests use synthetic MatchOdds with no network calls.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -16,13 +16,14 @@ def _bm(bookmaker: str, home=None, draw=None, away=None) -> BookmakerOdds:
     return BookmakerOdds(bookmaker=bookmaker, home=home, draw=draw, away=away)
 
 
-def _match(bookmakers: list[BookmakerOdds]) -> MatchOdds:
+def _match(bookmakers: list[BookmakerOdds], hours_until: float = 48.0) -> MatchOdds:
+    """Default 48h offset → 24-72h bucket, multiplier=1.0 (base threshold)."""
     return MatchOdds(
         match_id="test-spread",
         sport_key="soccer_epl",
         home_team="Home FC",
         away_team="Away FC",
-        commence_time=datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc),
+        commence_time=datetime.now(timezone.utc) + timedelta(hours=hours_until),
         bookmakers=bookmakers,
     )
 

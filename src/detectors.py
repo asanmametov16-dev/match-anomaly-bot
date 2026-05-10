@@ -59,6 +59,28 @@ def _median(values: Iterable[float | None]) -> float | None:
     return statistics.median(clean)
 
 
+def _time_bucket_info(match: MatchOdds) -> tuple[float, str]:
+    """Return (threshold_multiplier, label) for the match's time-to-kick-off bucket.
+
+    Closer to kick-off → lower multiplier → effectively lower threshold → more alerts.
+    Far from kick-off → higher multiplier → effectively higher threshold → less noise.
+    Uses match.commence_time timezone so it works with both aware and naive datetimes.
+    """
+    now = datetime.now(match.commence_time.tzinfo)
+    hours = max(0.0, (match.commence_time - now).total_seconds() / 3600)
+
+    buckets = settings.time_buckets_hours        # [6, 24, 72]
+    multipliers = settings.time_bucket_multipliers  # [0.7, 0.85, 1.0, 1.3]
+
+    for i, boundary in enumerate(buckets):
+        if hours < boundary:
+            label = f"<{boundary}ч ×{multipliers[i]:.2f}"
+            return multipliers[i], label
+
+    label = f">{buckets[-1]}ч ×{multipliers[-1]:.2f}"
+    return multipliers[-1], label
+
+
 # --- Детектор 1: spread между букмекерами -----------------------------------
 def detect_spread(match: MatchOdds) -> list[AnomalyHit]:
     """Большой разброс вероятностей между букмекерами по одному исходу.
@@ -80,8 +102,9 @@ def detect_spread(match: MatchOdds) -> list[AnomalyHit]:
         for outcome, p in probs.items():
             by_outcome[outcome].append((bm.bookmaker, p, getattr(bm, outcome)))
 
+    multiplier, bucket_label = _time_bucket_info(match)
     hits: list[AnomalyHit] = []
-    threshold_pp = settings.spread_pp_threshold
+    threshold_pp = settings.spread_pp_threshold * multiplier
 
     for outcome, entries in by_outcome.items():
         if len(entries) < 3:
@@ -100,13 +123,13 @@ def detect_spread(match: MatchOdds) -> list[AnomalyHit]:
                 description=(
                     f"Расхождение по {outcome}: "
                     f"{lo_p*100:.1f}% ({lo_odds:.2f}) ↔ {hi_p*100:.1f}% ({hi_odds:.2f}) "
-                    f"= {spread_pp:.1f}пп (порог {threshold_pp:.1f}пп)"
+                    f"= {spread_pp:.1f}пп [корзина {bucket_label}, эфф. {threshold_pp:.1f}пп]"
                 ),
                 payload={
                     "outcome": outcome,
                     "lo_bm": lo_bm, "lo_prob": lo_p, "lo_odds": lo_odds,
                     "hi_bm": hi_bm, "hi_prob": hi_p, "hi_odds": hi_odds,
-                    "spread_pp": spread_pp,
+                    "spread_pp": spread_pp, "bucket_label": bucket_label,
                 },
             ))
     return hits
@@ -164,9 +187,10 @@ def detect_drift(session: Session, match: MatchOdds) -> list[AnomalyHit]:
         return []
 
     snap_age_min = (datetime.utcnow() - opening_snap.captured_at).total_seconds() / 60
+    multiplier, bucket_label = _time_bucket_info(match)
 
     hits: list[AnomalyHit] = []
-    threshold_pp = settings.drift_pp_threshold
+    threshold_pp = settings.drift_pp_threshold * multiplier
 
     for outcome in ("home", "draw", "away"):
         opening = opening_probs.get(outcome)
@@ -184,7 +208,7 @@ def detect_drift(session: Session, match: MatchOdds) -> list[AnomalyHit]:
                     f"Движение по {outcome}: "
                     f"{opening*100:.1f}% {direction} {current*100:.1f}% "
                     f"= {abs_drift_pp:.1f}пп за {snap_age_min:.0f}мин "
-                    f"(окно {settings.drift_window_minutes}мин, порог {threshold_pp:.1f}пп)"
+                    f"[корзина {bucket_label}, эфф. {threshold_pp:.1f}пп]"
                 ),
                 payload={
                     "outcome": outcome,
@@ -193,6 +217,7 @@ def detect_drift(session: Session, match: MatchOdds) -> list[AnomalyHit]:
                     "drift_pp": drift_pp,
                     "window_minutes": settings.drift_window_minutes,
                     "snap_age_minutes": snap_age_min,
+                    "bucket_label": bucket_label,
                 },
             ))
     return hits
@@ -270,6 +295,9 @@ def detect_model_gap(session: Session, match: MatchOdds,
     rating_away = get_rating(session, match.away_team)
     fair = fair_odds_1x2(rating_home, rating_away)
 
+    multiplier, bucket_label = _time_bucket_info(match)
+    threshold = settings.model_gap_threshold * multiplier
+
     hits: list[AnomalyHit] = []
     pairs = [
         ("home", fair.home, current_medians.get("home")),
@@ -280,17 +308,18 @@ def detect_model_gap(session: Session, match: MatchOdds,
         if market is None or market <= 1.0:
             continue
         gap = abs(market - fair_price) / fair_price
-        if gap >= settings.model_gap_threshold:
+        if gap >= threshold:
             hits.append(AnomalyHit(
                 detector="model_gap",
                 severity=gap,
                 description=(
                     f"Расхождение с моделью по {outcome}: "
                     f"рынок {market:.2f}, модель {fair_price:.2f} "
-                    f"({gap*100:.1f}%, порог {settings.model_gap_threshold*100:.0f}%)"
+                    f"({gap*100:.1f}%) [корзина {bucket_label}, эфф. {threshold*100:.0f}%]"
                 ),
                 payload={"outcome": outcome, "market": market, "fair": fair_price,
-                         "rating_home": rating_home, "rating_away": rating_away},
+                         "rating_home": rating_home, "rating_away": rating_away,
+                         "bucket_label": bucket_label},
             ))
     return hits
 
@@ -393,8 +422,9 @@ def detect_exotic_spread(match: MatchOdds) -> list[AnomalyHit]:
                     (bm.bookmaker, price)
                 )
 
+    multiplier, bucket_label = _time_bucket_info(match)
     hits: list[AnomalyHit] = []
-    threshold = settings.exotic_spread_threshold
+    threshold = settings.exotic_spread_threshold * multiplier
     for (market_name, point, name), prices in grouped.items():
         if len(prices) < 3:
             continue
@@ -407,11 +437,12 @@ def detect_exotic_spread(match: MatchOdds) -> list[AnomalyHit]:
                 severity=spread,
                 description=(
                     f"Расхождение на {market_name} {name} {point}: "
-                    f"{lo:.2f} ↔ {hi:.2f} ({spread*100:.1f}%, "
-                    f"порог {threshold*100:.0f}%)"
+                    f"{lo:.2f} ↔ {hi:.2f} ({spread*100:.1f}%) "
+                    f"[корзина {bucket_label}, эфф. {threshold*100:.0f}%]"
                 ),
                 payload={"market": market_name, "point": point, "name": name,
-                         "min": lo, "max": hi, "prices": prices},
+                         "min": lo, "max": hi, "prices": prices,
+                         "bucket_label": bucket_label},
             ))
     return hits
 

@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     exotic_spread_threshold: float = 0.10  # для тоталов и фор
     sharp_move_threshold: float = 0.05    # разрыв sharp vs soft (5%)
 
+    # Временны́е корзины: порог × multiplier — чем ближе к матчу, тем чувствительнее
+    # 0-6ч: ×0.70 (ловим больше), 6-24ч: ×0.85, 24-72ч: ×1.0 (база), 72ч+: ×1.3
+    time_buckets_hours: list[int] = [6, 24, 72]
+    time_bucket_multipliers: list[float] = [0.7, 0.85, 1.0, 1.3]
+
     # Фильтрация алертов
     alert_window_hours: int = 48       # алертить только матчи в ближайшие N часов
     alert_min_detectors: int = 2       # минимум детекторов (без exotic_spread) для алерта
