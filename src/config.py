@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     # Фильтрация алертов
     alert_window_hours: int = 48       # алертить только матчи в ближайшие N часов
     alert_min_detectors: int = 2       # минимум детекторов (без exotic_spread) для алерта
+    min_bookmakers_per_match: int = 6  # матчи с меньшим числом контор пропускаем целиком
 
     # Elo
     elo_k_factor: float = 20.0

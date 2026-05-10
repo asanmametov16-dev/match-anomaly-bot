@@ -87,6 +87,15 @@ async def run_once() -> None:
             if hours_until > settings.alert_window_hours:
                 continue
 
+            # Мало букмекеров → консенсус ненадёжен, снимок не сохраняем
+            if len(match.bookmakers) < settings.min_bookmakers_per_match:
+                log.debug(
+                    "Пропускаем %s vs %s: только %d букмекеров (мин. %d)",
+                    match.home_team, match.away_team,
+                    len(match.bookmakers), settings.min_bookmakers_per_match,
+                )
+                continue
+
             medians = {
                 "home": _median(b.home for b in match.bookmakers),
                 "draw": _median(b.draw for b in match.bookmakers),
