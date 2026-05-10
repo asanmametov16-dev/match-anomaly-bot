@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ def detect_drift(session: Session, match: MatchOdds) -> list[AnomalyHit]:
     """
     from .probability import consensus_probabilities
 
-    window_start = datetime.utcnow() - timedelta(minutes=settings.drift_window_minutes)
+    window_start = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=settings.drift_window_minutes)
 
     opening_snap = session.execute(
         select(OddsSnapshot)
@@ -189,7 +189,7 @@ def detect_drift(session: Session, match: MatchOdds) -> list[AnomalyHit]:
     if current_probs is None:
         return []
 
-    snap_age_min = (datetime.utcnow() - opening_snap.captured_at).total_seconds() / 60
+    snap_age_min = (datetime.now(timezone.utc).replace(tzinfo=None) - opening_snap.captured_at).total_seconds() / 60
     multiplier, bucket_label = _time_bucket_info(match)
 
     hits: list[AnomalyHit] = []

@@ -29,7 +29,7 @@ def _bm(bookmaker: str, home=None, draw=None, away=None) -> BookmakerOdds:
 
 
 def _match(bookmakers, match_id="match-1", hours_until=5.0) -> MatchOdds:
-    commence = datetime.utcnow() + timedelta(hours=hours_until)
+    commence = datetime.now(timezone.utc) + timedelta(hours=hours_until)
     return MatchOdds(
         match_id=match_id,
         sport_key="soccer_epl",
@@ -52,12 +52,12 @@ def _snap(match_id, age_minutes, home=2.00, draw=3.50, away=4.00):
         sport_key="soccer_epl",
         home_team="Home FC",
         away_team="Away FC",
-        commence_time=datetime.utcnow() + timedelta(hours=5),
+        commence_time=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=5),
         median_home=home,
         median_draw=draw,
         median_away=away,
         bookmakers=bms,
-        captured_at=datetime.utcnow() - timedelta(minutes=age_minutes),
+        captured_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=age_minutes),
     )
 
 

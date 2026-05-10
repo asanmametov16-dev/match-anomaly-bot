@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 
@@ -22,7 +22,7 @@ DEDUP_WINDOW = timedelta(hours=12)
 
 def _was_recently_alerted(session, match_id: str, detector: str) -> bool:
     """Проверяет БД: было ли срабатывание этого детектора по матчу за последние 12ч."""
-    cutoff = datetime.utcnow() - DEDUP_WINDOW
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - DEDUP_WINDOW
     count = session.scalar(
         select(func.count(Anomaly.id))
         .where(Anomaly.match_id == match_id)

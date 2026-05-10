@@ -387,7 +387,7 @@ async def send_startup_message() -> None:
     if _bot is None:
         return
     text = (
-        f"🤖 Anomaly bot запущен в {datetime.utcnow().strftime('%H:%M UTC')}\n"
+        f"🤖 Anomaly bot запущен в {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
         f"Опрос каждые {settings.poll_interval_minutes} мин\n"
         f"Спорт: {settings.odds_api_sport}, регионы: {settings.odds_api_regions}\n"
         f"Команды: /help"

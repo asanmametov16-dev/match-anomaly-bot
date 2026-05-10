@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from html import escape
 
 from sqlalchemy import desc, func, select
@@ -59,7 +59,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         total = session.scalar(select(func.count(Anomaly.id))) or 0
         last_24h = session.scalar(
             select(func.count(Anomaly.id))
-            .where(Anomaly.detected_at >= datetime.utcnow() - timedelta(hours=24))
+            .where(Anomaly.detected_at >= datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24))
         ) or 0
         snapshots = session.scalar(select(func.count(OddsSnapshot.id))) or 0
         teams = session.scalar(select(func.count(TeamRating.team))) or 0

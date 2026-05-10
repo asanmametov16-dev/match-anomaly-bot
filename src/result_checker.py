@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
 from sqlalchemy import select
@@ -121,7 +121,7 @@ async def check_anomaly_results() -> None:
         session.commit()
 
         # Ищем аномалии завершившихся матчей (>2ч с начала)
-        cutoff = datetime.utcnow() - timedelta(hours=2)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)
         anomalies = session.execute(
             select(Anomaly).where(Anomaly.commence_time <= cutoff)
         ).scalars().all()
@@ -146,7 +146,7 @@ async def check_anomaly_results() -> None:
             if result is None:
                 # После 96 часов с начала матча прекращаем попытки — лига скорее всего
                 # вне покрытия football-data.org (MLS, Süper Lig, Eredivisie и т.д.)
-                age_hours = (datetime.utcnow() - first.commence_time.replace(tzinfo=None)
+                age_hours = (datetime.now(timezone.utc).replace(tzinfo=None) - first.commence_time.replace(tzinfo=None)
                              ).total_seconds() / 3600
                 if age_hours > 96:
                     log.warning(

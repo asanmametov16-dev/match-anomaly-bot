@@ -50,7 +50,7 @@ def _prev_snap(session, match_id: str, bm_prices: dict[str, float]) -> None:
         commence_time=datetime.now(timezone.utc) + timedelta(hours=12),
         median_home=2.00, median_draw=3.50, median_away=4.00,
         bookmakers=bms,
-        captured_at=datetime.utcnow() - timedelta(minutes=15),
+        captured_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=15),
     ))
     session.commit()
 
