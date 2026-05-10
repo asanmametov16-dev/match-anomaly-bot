@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     exotic_spread_threshold: float = 0.10  # для тоталов и фор
     sharp_move_threshold: float = 0.05    # разрыв sharp vs soft (5%)
 
+    # Веса букмекеров: sharp-конторы первыми двигают рынок и отражают «умные деньги»
+    sharp_bookmakers: list[str] = ["pinnacle", "betfair_ex_eu", "betfair_ex_uk",
+                                   "sbobet", "matchbook"]
+    sharp_weight: float = 1.0    # вес sharp-конторы в consensus_probabilities
+    default_weight: float = 0.4  # вес остальных контор
+
     # Временны́е корзины: порог × multiplier — чем ближе к матчу, тем чувствительнее
     # 0-6ч: ×0.70 (ловим больше), 6-24ч: ×0.85, 24-72ч: ×1.0 (база), 72ч+: ×1.3
     time_buckets_hours: list[int] = [6, 24, 72]

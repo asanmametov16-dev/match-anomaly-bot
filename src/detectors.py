@@ -6,9 +6,12 @@
 """
 from __future__ import annotations
 
+import logging
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+
+log = logging.getLogger(__name__)
 
 # Букмекеры, которые считаются «острыми» (sharp): они двигают рынок первыми
 # и отражают «умные деньги». Если их коэф. заметно ниже soft-контор — сигнал.
@@ -229,8 +232,9 @@ def detect_synchronized(session: Session, match: MatchOdds) -> list[AnomalyHit]:
     и считает, у скольких букмекеров одновременно произошло заметное
     движение в одну сторону.
 
-    Если 3+ букмекера за один интервал двинули коэффициент >5% в одну сторону —
-    это сильный сигнал, что 'умные деньги' зашли через несколько контор сразу.
+    Срабатывает только если среди двинувших есть хотя бы один sharp-букмекер.
+    Движение одних лишь soft-контор — это копирование чужой линии, а не сигнал
+    «умных денег». Слабые срабатывания (без sharp) логируются на DEBUG.
     """
     prev = session.execute(
         select(OddsSnapshot)
@@ -245,6 +249,7 @@ def detect_synchronized(session: Session, match: MatchOdds) -> list[AnomalyHit]:
     prev_by_bm = {b["bookmaker"]: b for b in prev.bookmakers}
     threshold = settings.sync_move_threshold
     min_movers = settings.sync_min_bookmakers
+    _sharp_set = {b.lower() for b in settings.sharp_bookmakers}
     hits: list[AnomalyHit] = []
 
     for outcome in ("home", "draw", "away"):
@@ -265,22 +270,31 @@ def detect_synchronized(session: Session, match: MatchOdds) -> list[AnomalyHit]:
                 movers_up.append((current.bookmaker, prev_price, cur_price))
 
         for direction, movers in (("↓", movers_down), ("↑", movers_up)):
-            if len(movers) >= min_movers:
-                avg_change = sum(
-                    abs(c - p) / p for _, p, c in movers
-                ) / len(movers)
-                hits.append(AnomalyHit(
-                    detector="synchronized",
-                    severity=avg_change * len(movers),  # величина × массовость
-                    description=(
-                        f"Синхронное {direction} по {outcome}: "
-                        f"{len(movers)} букмекеров, средний сдвиг {avg_change*100:.1f}% "
-                        f"(порог {min_movers}+ контор × {threshold*100:.0f}%)"
-                    ),
-                    payload={"outcome": outcome, "direction": direction,
-                             "movers": [{"bm": bm, "from": p, "to": c}
-                                        for bm, p, c in movers]},
-                ))
+            if len(movers) < min_movers:
+                continue
+            sharp_movers = [bm for bm, _, _ in movers if bm.lower() in _sharp_set]
+            if not sharp_movers:
+                log.debug(
+                    "Слабое синхр. %s по %s: %d контор без sharp — пропускаем %s",
+                    direction, outcome, len(movers),
+                    [bm for bm, _, _ in movers],
+                )
+                continue
+            avg_change = sum(abs(c - p) / p for _, p, c in movers) / len(movers)
+            hits.append(AnomalyHit(
+                detector="synchronized",
+                severity=avg_change * len(movers),
+                description=(
+                    f"Синхронное {direction} по {outcome}: "
+                    f"{len(movers)} букмекеров (sharp: {', '.join(sharp_movers)}), "
+                    f"средний сдвиг {avg_change*100:.1f}% "
+                    f"(порог {min_movers}+ × {threshold*100:.0f}%)"
+                ),
+                payload={"outcome": outcome, "direction": direction,
+                         "sharp_movers": sharp_movers,
+                         "movers": [{"bm": bm, "from": p, "to": c}
+                                    for bm, p, c in movers]},
+            ))
     return hits
 
 
