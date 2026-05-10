@@ -52,28 +52,41 @@ def expected_score(rating_a: float, rating_b: float) -> float:
     return 1.0 / (1.0 + 10 ** ((rating_b - rating_a) / 400.0))
 
 
-def fair_odds_1x2(rating_home: float, rating_away: float,
-                  draw_share: float = 0.26) -> FairOdds:
-    """Очень упрощённая модель 1X2.
+def _dynamic_draw_share(rating_home: float, rating_away: float) -> float:
+    """Draw frequency falls as the effective Elo gap widens.
 
-    Берём вероятность победы по Elo с поправкой на домашнее поле, фиксируем
-    'базовую' долю ничьих ~26% (среднее по футболу) и распределяем оставшееся
-    между home/away пропорционально Elo-вероятностям.
+    Empirical football data: evenly-matched teams (~0 effective gap) draw ~30%
+    of the time; heavily mismatched ones (~400+ effective gap) draw only ~18%.
+    Formula: 0.30 - 0.0003 * |effective_gap|, clamped to [0.18, 0.32].
+
+    'Effective gap' includes the home-advantage correction so that, e.g., a
+    team 200 Elo points stronger at home has a gap of 260 (200 raw + 60 HA),
+    correctly yielding draw_share ≈ 22%.
     """
+    elo_diff = abs((rating_home + settings.elo_home_advantage) - rating_away)
+    return max(0.18, min(0.32, 0.30 - 0.0003 * elo_diff))
+
+
+def fair_odds_1x2(rating_home: float, rating_away: float,
+                  draw_share: float | None = None) -> FairOdds:
+    """Simplified 1X2 model using Elo ratings.
+
+    When draw_share is None (default), it is computed dynamically from the
+    effective Elo gap — closer teams draw more often. Pass an explicit float
+    to override (e.g. for back-testing with a fixed share).
+    """
+    if draw_share is None:
+        draw_share = _dynamic_draw_share(rating_home, rating_away)
+
     p_home_raw = expected_score(
         rating_home + settings.elo_home_advantage, rating_away
     )
     p_away_raw = 1.0 - p_home_raw
     non_draw = 1.0 - draw_share
 
-    p_home = p_home_raw * non_draw
-    p_away = p_away_raw * non_draw
-    p_draw = draw_share
-
-    # Защита от нулей
-    p_home = max(p_home, 0.01)
-    p_away = max(p_away, 0.01)
-    p_draw = max(p_draw, 0.01)
+    p_home = max(p_home_raw * non_draw, 0.01)
+    p_away = max(p_away_raw * non_draw, 0.01)
+    p_draw = max(draw_share, 0.01)
 
     return FairOdds(home=1 / p_home, draw=1 / p_draw, away=1 / p_away)
 
