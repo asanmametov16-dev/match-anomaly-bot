@@ -106,7 +106,7 @@ async def run_once() -> None:
             # прошлым снимком, поэтому сохранение делаем ПОСЛЕ детекта.
             hits: list[AnomalyHit] = []
             hits += detect_spread(match)
-            hits += detect_drift(session, match, medians)
+            hits += detect_drift(session, match)
             hits += detect_synchronized(session, match)
             hits += detect_model_gap(session, match, medians)
             hits += detect_sharp_move(match)

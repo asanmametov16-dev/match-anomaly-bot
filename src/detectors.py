@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 # Букмекеры, которые считаются «острыми» (sharp): они двигают рынок первыми
 # и отражают «умные деньги». Если их коэф. заметно ниже soft-контор — сигнал.
@@ -40,7 +41,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import OddsSnapshot
 from .elo import fair_odds_1x2, get_rating
-from .odds_client import MatchOdds
+from .odds_client import BookmakerOdds, MatchOdds
 
 
 @dataclass
@@ -112,41 +113,87 @@ def detect_spread(match: MatchOdds) -> list[AnomalyHit]:
 
 
 # --- Детектор 2: drift (движение линии) -------------------------------------
-def detect_drift(session: Session, match: MatchOdds,
-                 current_medians: dict[str, float | None]) -> list[AnomalyHit]:
-    """Сравнивает текущую медиану коэффициентов с самым ранним сохранённым
-    снимком по этому матчу. Резкое движение — потенциальный сигнал."""
-    first = session.execute(
+def detect_drift(session: Session, match: MatchOdds) -> list[AnomalyHit]:
+    """Сравнивает текущие вероятности с самым старым снимком в скользящем окне.
+
+    Используем consensus_probabilities(match) для текущего состояния, а не
+    последний снимок из БД: detect_drift вызывается ДО сохранения нового снимка,
+    поэтому «текущий» снимок ещё не существует. Вычисление прямо из match.bookmakers
+    гарантирует, что current всегда актуален и не зависит от порядка записи в БД.
+    """
+    from .probability import consensus_probabilities
+
+    window_start = datetime.utcnow() - timedelta(minutes=settings.drift_window_minutes)
+
+    opening_snap = session.execute(
         select(OddsSnapshot)
         .where(OddsSnapshot.match_id == match.match_id)
+        .where(OddsSnapshot.captured_at >= window_start)
         .order_by(OddsSnapshot.captured_at.asc())
         .limit(1)
     ).scalar_one_or_none()
 
-    if first is None:
-        return []  # это первый снимок, сравнивать не с чем
+    if opening_snap is None:
+        return []  # нет снимка в окне — рано сравнивать
+
+    # Восстанавливаем объекты BookmakerOdds из JSON-снимка для честного
+    # сравнения через consensus_probabilities (с убранной маржой)
+    bm_objects = [
+        BookmakerOdds(
+            bookmaker=b.get("bookmaker", ""),
+            home=b.get("home"),
+            draw=b.get("draw"),
+            away=b.get("away"),
+        )
+        for b in (opening_snap.bookmakers or [])
+    ]
+    opening_match = MatchOdds(
+        match_id=match.match_id,
+        sport_key=match.sport_key,
+        home_team=match.home_team,
+        away_team=match.away_team,
+        commence_time=match.commence_time,
+        bookmakers=bm_objects,
+    )
+    opening_probs = consensus_probabilities(opening_match)
+    if opening_probs is None:
+        return []
+
+    current_probs = consensus_probabilities(match)
+    if current_probs is None:
+        return []
+
+    snap_age_min = (datetime.utcnow() - opening_snap.captured_at).total_seconds() / 60
 
     hits: list[AnomalyHit] = []
-    pairs = [
-        ("home", first.median_home, current_medians.get("home")),
-        ("draw", first.median_draw, current_medians.get("draw")),
-        ("away", first.median_away, current_medians.get("away")),
-    ]
-    for outcome, opening, current in pairs:
-        if opening is None or current is None or opening <= 1.0:
+    threshold_pp = settings.drift_pp_threshold
+
+    for outcome in ("home", "draw", "away"):
+        opening = opening_probs.get(outcome)
+        current = current_probs.get(outcome)
+        if opening is None or current is None:
             continue
-        drift = abs(current - opening) / opening
-        if drift >= settings.drift_threshold:
-            direction = "↓" if current < opening else "↑"
+        drift_pp = (current - opening) * 100
+        abs_drift_pp = abs(drift_pp)
+        if abs_drift_pp >= threshold_pp:
+            direction = "↑" if drift_pp > 0 else "↓"
             hits.append(AnomalyHit(
                 detector="drift",
-                severity=drift,
+                severity=abs_drift_pp,
                 description=(
-                    f"Движение по {outcome}: {opening:.2f} {direction} {current:.2f} "
-                    f"({drift*100:.1f}%, порог {settings.drift_threshold*100:.0f}%)"
+                    f"Движение по {outcome}: "
+                    f"{opening*100:.1f}% {direction} {current*100:.1f}% "
+                    f"= {abs_drift_pp:.1f}пп за {snap_age_min:.0f}мин "
+                    f"(окно {settings.drift_window_minutes}мин, порог {threshold_pp:.1f}пп)"
                 ),
-                payload={"outcome": outcome, "opening": opening,
-                         "current": current},
+                payload={
+                    "outcome": outcome,
+                    "opening_prob": opening,
+                    "current_prob": current,
+                    "drift_pp": drift_pp,
+                    "window_minutes": settings.drift_window_minutes,
+                    "snap_age_minutes": snap_age_min,
+                },
             ))
     return hits
 

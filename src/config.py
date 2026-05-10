@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     # Пороги детекторов
     spread_threshold: float = 0.08          # deprecated, kept for rollback
     spread_pp_threshold: float = 4.0        # порог в процентных пунктах (4.0pp = разница 50%→54%)
-    drift_threshold: float = 0.15
+    drift_threshold: float = 0.15           # deprecated, kept for rollback
+    drift_window_minutes: int = 120         # сравниваем с самым старым снимком в этом окне
+    drift_pp_threshold: float = 5.0         # порог движения в процентных пунктах
     model_gap_threshold: float = 0.20
     sync_move_threshold: float = 0.05      # сдвиг у одного букмекера для счёта
     sync_min_bookmakers: int = 3           # минимум контор, двинувших одновременно
