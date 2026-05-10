@@ -144,7 +144,22 @@ async def check_anomaly_results() -> None:
                 session, first.home_team, first.away_team, first.commence_time
             )
             if result is None:
-                continue  # результат не найден (лига вне football-data.org)
+                # После 96 часов с начала матча прекращаем попытки — лига скорее всего
+                # вне покрытия football-data.org (MLS, Süper Lig, Eredivisie и т.д.)
+                age_hours = (datetime.utcnow() - first.commence_time.replace(tzinfo=None)
+                             ).total_seconds() / 3600
+                if age_hours > 96:
+                    log.warning(
+                        "Результат '%s vs %s' (%s) не найден за 96ч — "
+                        "лига, вероятно, вне football-data.org. Помечаем как проверено.",
+                        first.home_team, first.away_team,
+                        first.commence_time.date(),
+                    )
+                    session.add(ResultNotification(result_key=result_key, result_found=False))
+                else:
+                    log.debug("Результат '%s vs %s' пока не найден (%.0fч после матча)",
+                              first.home_team, first.away_team, age_hours)
+                continue
 
             # Фактический исход
             if result.home_score > result.away_score:

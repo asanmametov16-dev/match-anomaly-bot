@@ -20,7 +20,7 @@ from telegram.ext import (Application, CommandHandler, ContextTypes,
                           filters)
 
 from .config import settings
-from .db import Anomaly, AnomalyOutcome, OddsSnapshot, SessionLocal, TeamRating
+from .db import Anomaly, AnomalyOutcome, OddsSnapshot, ResultNotification, SessionLocal, TeamRating
 from .elo import _normalize as normalize_team
 
 log = logging.getLogger(__name__)
@@ -69,6 +69,30 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             .group_by(Anomaly.detector)
         ).all()
 
+        # Статистика сигналов по результатам
+        outcomes = session.execute(select(AnomalyOutcome)).scalars().all()
+        no_result = session.scalar(
+            select(func.count(ResultNotification.result_key))
+            .where(ResultNotification.result_found == False)  # noqa: E712
+        ) or 0
+
+        # Группируем AnomalyOutcome по матчу и считаем большинством голосов
+        by_match: dict[str, list] = {}
+        for o in outcomes:
+            by_match.setdefault(o.result_key, []).append(o.confirmed)
+
+        sig_confirmed = sig_not_confirmed = sig_no_direction = 0
+        for confirmeds in by_match.values():
+            directional = [c for c in confirmeds if c is not None]
+            if not directional:
+                sig_no_direction += 1
+            elif sum(1 for c in directional if c == 1) > len(directional) / 2:
+                sig_confirmed += 1
+            else:
+                sig_not_confirmed += 1
+
+        sig_total = sig_confirmed + sig_not_confirmed + sig_no_direction + no_result
+
     lines = [
         "📊 <b>Статистика</b>",
         f"Всего аномалий: <b>{total}</b>",
@@ -83,6 +107,16 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             lines.append(f"  • {detector}: {count}")
     else:
         lines.append("  (пока нет срабатываний)")
+
+    lines += [
+        "",
+        "<b>Сигналы (сыгранные матчи):</b>",
+        f"  Всего проверено: <b>{sig_total}</b>",
+        f"  ✅ Подтвердилось: <b>{sig_confirmed}</b>",
+        f"  ❌ Не подтвердилось: <b>{sig_not_confirmed}</b>",
+        f"  — Без направления: <b>{sig_no_direction}</b>",
+        f"  ❓ Нет результата (лига не в БД): <b>{no_result}</b>",
+    ]
 
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 

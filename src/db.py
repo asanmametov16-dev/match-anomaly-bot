@@ -2,7 +2,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    JSON, Column, DateTime, Float, Integer, String, Text, create_engine,
+    JSON, Boolean, Column, DateTime, Float, Integer, String, Text, create_engine, text,
 )
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -79,6 +79,8 @@ class ResultNotification(Base):
 
     result_key = Column(String, primary_key=True)
     sent_at = Column(DateTime, default=datetime.utcnow)
+    # True = результат найден и отправлен; False = лига вне football-data.org
+    result_found = Column(Boolean, nullable=True, default=True)
 
 
 class Anomaly(Base):
@@ -104,3 +106,12 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    # Миграция: добавляем колонку result_found если её ещё нет (старая БД)
+    with engine.connect() as conn:
+        try:
+            conn.execute(text(
+                "ALTER TABLE result_notifications ADD COLUMN result_found BOOLEAN"
+            ))
+            conn.commit()
+        except Exception:
+            pass  # колонка уже есть

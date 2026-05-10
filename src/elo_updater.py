@@ -35,8 +35,8 @@ def _result_key(home: str, away: str, dt: datetime) -> str:
 
 
 async def update_elo_from_results() -> None:
-    """Подтягивает результаты за последние 2 дня и обновляет Elo."""
-    matches = await fetch_finished_matches(days_back=2)
+    """Подтягивает результаты за последние 5 дней и обновляет Elo."""
+    matches = await fetch_finished_matches(days_back=5)
     if not matches:
         return
 
@@ -58,6 +58,7 @@ async def update_elo_from_results() -> None:
                 away_score=m.away_score,
             )
             session.add(ProcessedResult(key=key))
+            session.flush()  # сразу в identity map, чтобы get() видел команды в следующих матчах
             updated += 1
 
         session.commit()

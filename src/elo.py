@@ -86,12 +86,16 @@ def update_ratings(session: Session, home_team: str, away_team: str,
     """
     home_key = _normalize(home_team)
     away_key = _normalize(away_team)
-    home = session.get(TeamRating, home_key) or TeamRating(
-        team=home_key, rating=settings.elo_default_rating, games_played=0,
-    )
-    away = session.get(TeamRating, away_key) or TeamRating(
-        team=away_key, rating=settings.elo_default_rating, games_played=0,
-    )
+
+    home = session.get(TeamRating, home_key)
+    if home is None:
+        home = TeamRating(team=home_key, rating=settings.elo_default_rating, games_played=0)
+        session.add(home)
+
+    away = session.get(TeamRating, away_key)
+    if away is None:
+        away = TeamRating(team=away_key, rating=settings.elo_default_rating, games_played=0)
+        session.add(away)
 
     if home_score > away_score:
         actual_home, actual_away = 1.0, 0.0
@@ -110,6 +114,3 @@ def update_ratings(session: Session, home_team: str, away_team: str,
     away.rating += k * (actual_away - expected_away)
     home.games_played = (home.games_played or 0) + 1
     away.games_played = (away.games_played or 0) + 1
-
-    session.merge(home)
-    session.merge(away)
