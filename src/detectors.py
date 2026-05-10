@@ -60,27 +60,53 @@ def _median(values: Iterable[float | None]) -> float | None:
 
 # --- Детектор 1: spread между букмекерами -----------------------------------
 def detect_spread(match: MatchOdds) -> list[AnomalyHit]:
-    """Большое расхождение между минимальным и максимальным коэффициентом
-    у разных букмекеров — признак того, что часть конторы знает что-то,
-    а часть ещё не успела среагировать."""
-    hits: list[AnomalyHit] = []
-    for outcome in ("home", "draw", "away"):
-        prices = [getattr(b, outcome) for b in match.bookmakers]
-        clean = [p for p in prices if p is not None and p > 1.0]
-        if len(clean) < 3:  # нужно хотя бы 3 букмекера для смысла
+    """Большой разброс вероятностей между букмекерами по одному исходу.
+
+    Использует вероятности без маржи (remove_overround), а не сырые коэффициенты:
+    это убирает влияние разного размера наценки у разных контор и позволяет
+    честно сравнивать «мнения» букмекеров об исходе. Порог в процентных пунктах.
+    """
+    from .probability import probabilities_from_match
+
+    # Собираем (prob, raw_odds) для каждого исхода по каждому букмекеру
+    by_outcome: dict[str, list[tuple[str, float, float | None]]] = {
+        "home": [], "draw": [], "away": [],
+    }
+    for bm in match.bookmakers:
+        probs = probabilities_from_match(bm)
+        if probs is None:
             continue
-        lo, hi = min(clean), max(clean)
-        spread = (hi - lo) / lo
-        if spread >= settings.spread_threshold:
+        for outcome, p in probs.items():
+            by_outcome[outcome].append((bm.bookmaker, p, getattr(bm, outcome)))
+
+    hits: list[AnomalyHit] = []
+    threshold_pp = settings.spread_pp_threshold
+
+    for outcome, entries in by_outcome.items():
+        if len(entries) < 3:
+            continue
+        probs_only = [p for _, p, _ in entries]
+        lo_idx = probs_only.index(min(probs_only))
+        hi_idx = probs_only.index(max(probs_only))
+        lo_bm, lo_p, lo_odds = entries[lo_idx]
+        hi_bm, hi_p, hi_odds = entries[hi_idx]
+        spread_pp = (hi_p - lo_p) * 100
+
+        if spread_pp >= threshold_pp:
             hits.append(AnomalyHit(
                 detector="spread",
-                severity=spread,
+                severity=spread_pp,
                 description=(
-                    f"Расхождение по {outcome}: {lo:.2f} ↔ {hi:.2f} "
-                    f"({spread*100:.1f}%, порог {settings.spread_threshold*100:.0f}%)"
+                    f"Расхождение по {outcome}: "
+                    f"{lo_p*100:.1f}% ({lo_odds:.2f}) ↔ {hi_p*100:.1f}% ({hi_odds:.2f}) "
+                    f"= {spread_pp:.1f}пп (порог {threshold_pp:.1f}пп)"
                 ),
-                payload={"outcome": outcome, "min": lo, "max": hi,
-                         "prices": prices},
+                payload={
+                    "outcome": outcome,
+                    "lo_bm": lo_bm, "lo_prob": lo_p, "lo_odds": lo_odds,
+                    "hi_bm": hi_bm, "hi_prob": hi_p, "hi_odds": hi_odds,
+                    "spread_pp": spread_pp,
+                },
             ))
     return hits
 

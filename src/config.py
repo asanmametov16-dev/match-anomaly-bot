@@ -23,7 +23,8 @@ class Settings(BaseSettings):
     elo_update_hour_utc: int = 9  # ежедневно в 09:00 UTC (12:00 МСК)
 
     # Пороги детекторов
-    spread_threshold: float = 0.08
+    spread_threshold: float = 0.08          # deprecated, kept for rollback
+    spread_pp_threshold: float = 4.0        # порог в процентных пунктах (4.0pp = разница 50%→54%)
     drift_threshold: float = 0.15
     model_gap_threshold: float = 0.20
     sync_move_threshold: float = 0.05      # сдвиг у одного букмекера для счёта
