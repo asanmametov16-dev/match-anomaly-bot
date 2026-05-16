@@ -145,6 +145,32 @@ class ProbCalibration(Base):
     scored_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class SstatsModelOutcome(Base):
+    """Историческая калибровка модели sstats: winProb против факта.
+
+    Заполняется офлайн-бэкфиллом из /Games/list?Ended=true + /Games/glicko.
+    В отличие от ProbCalibration (рынок vs исход — нужны наши снимки),
+    здесь скорится МОДЕЛЬ sstats, поэтому историю можно подтянуть сразу.
+    Основа для сравнения «модель vs рынок» и лиго-зависимого precision-gate.
+    """
+    __tablename__ = "sstats_model_outcome"
+
+    game_id = Column(Integer, primary_key=True)   # sstats game id
+    league = Column(String, index=True, nullable=True)
+    played_date = Column(DateTime, nullable=True)
+    home_team = Column(String, nullable=False)
+    away_team = Column(String, nullable=False)
+    p_home = Column(Float, nullable=False)
+    p_draw = Column(Float, nullable=False)
+    p_away = Column(Float, nullable=False)
+    home_xg = Column(Float, nullable=True)
+    away_xg = Column(Float, nullable=True)
+    actual = Column(String, nullable=False)        # home / draw / away
+    brier = Column(Float, nullable=False)
+    log_loss = Column(Float, nullable=False)
+    recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 engine = create_engine(settings.db_url, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 

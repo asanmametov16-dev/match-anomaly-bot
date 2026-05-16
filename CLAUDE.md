@@ -36,8 +36,9 @@ src/
 ├── clv.py             # closing line value: оценка сигнальной ценности алертов
 ├── calibration.py     # CLV → множители весов детекторов (compute_score)
 ├── prob_calibration.py # Brier/log-loss консенсуса против реальных исходов
+├── sstats_history.py  # офлайн-бэкфилл калибровки модели sstats по лигам
 ├── notifier.py        # отправка алертов в Telegram (использует общий Bot)
-├── bot.py             # команды: /stats /accuracy /clv /calibration /weights /recent /thresholds /elo
+├── bot.py             # команды: /stats /accuracy /clv /calibration /modelcal /weights /recent /thresholds /elo
 └── pipeline.py        # один цикл: fetch → xG-обогащение → детект → save → alert
 ```
 
@@ -228,9 +229,21 @@ No-op без форы 0.0 — лучше молчать, чем шуметь.
 числу детекторов). Cold-start безопасен: без CLV-данных множитель = 1.0,
 решает счёт+согласие. Это оценка качества сигнала, не ставочный вердикт.
 
+### Калибровка модели sstats (исторический бэкфилл)
+
+`prob_calibration` нельзя засеять историей: ему нужны НАШИ снимки рынка,
+которых для прошлых матчей нет. Поэтому `sstats_history.py` скорит
+**модель sstats** (winProb из `/Games/glicko`) против факта из
+`/Games/list?Ended=true` — это можно подтянуть сразу. Запуск офлайн:
+`python -m scripts.backfill_sstats_history --max-games N` (идемпотентно,
+rate-limit ~133/мин, НЕ в пайплайне). Таблица `SstatsModelOutcome`,
+агрегат по лигам — команда `/modelcal`. Назначение: сравнение
+модель-vs-рынок (`/modelcal` ↔ `/calibration`) и лиго-зависимое доверие
+к `model_gap`. Brier/log-loss переиспользуются из `prob_calibration`.
+
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 139 тестов, 0 сетевых
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 146 тестов, 0 сетевых
 запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
 
 `conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но
@@ -254,6 +267,7 @@ tests/
 ├── test_calibration.py              # CLV → веса детекторов
 ├── test_prob_calibration.py         # Brier/log-loss против исходов
 ├── test_signal_gate.py              # precision-gate classify_signal
+├── test_sstats_history.py           # бэкфилл калибровки модели sstats
 ├── test_elo_bootstrap.py            # загрузка рейтингов с clubelo.com
 └── test_elo_draw_share.py           # динамическая доля ничьих
 ```

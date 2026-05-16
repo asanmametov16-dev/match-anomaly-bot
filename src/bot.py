@@ -26,6 +26,7 @@ from .db import (Anomaly, AnomalyCLV, AnomalyOutcome, OddsSnapshot,
 from .detectors import DETECTOR_WEIGHTS
 from .elo import _normalize as normalize_team
 from .prob_calibration import calibration_summary
+from .sstats_history import sstats_model_summary
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/accuracy — точность детекторов\n"
         "/clv — closing line value по детекторам\n"
         "/calibration — точность вероятностей (Brier)\n"
+        "/modelcal — калибровка модели sstats по лигам\n"
         "/weights — веса детекторов (калибровка по CLV)\n"
         "/recent [N] — последние N аномалий\n"
         "/thresholds — текущие пороги\n"
@@ -295,6 +297,44 @@ async def cmd_calibration(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+async def cmd_modelcal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Историческая калибровка модели sstats (Brier по лигам)."""
+    if not _is_authorized(update):
+        return
+
+    s = sstats_model_summary()
+    if not s.get("n"):
+        await update.message.reply_text(
+            "📊 <b>Калибровка модели sstats</b>\n\n"
+            "<i>Нет данных. Запусти бэкфилл: "
+            "python -m scripts.backfill_sstats_history</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    unif = s["uniform_brier"]
+    b = s["mean_brier"]
+    mark = "🟢" if b < unif - 0.05 else ("🟡" if b < unif else "🔴")
+    lines = [
+        "📊 <b>Калибровка модели sstats</b>",
+        "",
+        f"матчей: <b>{s['n']}</b>",
+        f"{mark} Brier: <b>{b:.4f}</b>  <i>(равномерный {unif:.3f})</i>",
+        f"log-loss: <b>{s['mean_log_loss']:.4f}</b>",
+        "",
+        "<b>По лигам</b> <i>(где модель точнее/хуже)</i>:",
+    ]
+    for lg in s["leagues"]:
+        lb = lg["brier"]
+        f = "🟢" if lb < unif - 0.05 else ("🟡" if lb < unif else "🔴")
+        lines.append(f"{f} {escape(lg['league'])}: n={lg['n']} Brier={lb:.4f}")
+    lines += [
+        "",
+        "<i>Сравнение с рыночным /calibration → где доверять model_gap.</i>",
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
 async def cmd_weights(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Текущие веса детекторов: базовый × CLV-множитель = эффективный."""
     if not _is_authorized(update):
@@ -413,6 +453,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("accuracy", cmd_accuracy))
     app.add_handler(CommandHandler("clv", cmd_clv))
     app.add_handler(CommandHandler("calibration", cmd_calibration))
+    app.add_handler(CommandHandler("modelcal", cmd_modelcal))
     app.add_handler(CommandHandler("weights", cmd_weights))
     app.add_handler(CommandHandler("recent", cmd_recent))
     app.add_handler(CommandHandler("thresholds", cmd_thresholds))
