@@ -264,7 +264,7 @@ cold-start безопасен.
 
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 170 тестов, 0 сетевых
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 173 теста, 0 сетевых
 запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
 
 `conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но

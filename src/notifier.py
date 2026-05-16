@@ -146,31 +146,43 @@ def _anomaly_adjusted_probabilities(
     )
 
 
-def _format_signal(hits: list[AnomalyHit], match: MatchOdds) -> str:
-    """Формирует строку с торговым сигналом на основе направленных детекторов.
+def _format_signal(hits: list[AnomalyHit], match: MatchOdds,
+                   meta: dict | None = None) -> str:
+    """Формирует строку с направлением сигнала.
 
-    Агрегирует severity по исходам. Сигнал выдаётся только если один исход
-    набирает значительно больше поддержки, чем остальные.
+    Источник истины — precision-gate (`classify_signal`/meta): именно он
+    решил эскалировать алерт. Если meta задан, берём сторону из него и НЕ
+    выводим независимый вердикт «противоречивый» (гейт уже гарантировал
+    согласие ≥ порога — иначе алерта бы не было). Без meta — старая
+    severity-эвристика как fallback. Сторона детектора определяется тем же
+    extract_bet_side, что и в гейте, — чтобы не расходиться.
     """
+    from .clv import extract_bet_side
+
     score: dict[str, float] = {"home": 0.0, "draw": 0.0, "away": 0.0}
     detector_count: dict[str, int] = {"home": 0, "draw": 0, "away": 0}
 
     for hit in hits:
-        backed = _backed_outcome_from_hit(hit)
+        backed = extract_bet_side(hit.detector, hit.payload or {})
         if backed and backed in score:
             score[backed] += hit.severity
             detector_count[backed] += 1
 
     total_score = sum(score.values())
-    if total_score == 0:
-        return ""  # только ненаправленные детекторы
 
-    best = max(score, key=lambda k: score[k])
-    best_score = score[best]
-
-    # Сигнал только если лидер набирает >55% суммарного score
-    if best_score / total_score < 0.55:
-        return "📌 <b>Сигнал:</b> <i>противоречивый — детекторы указывают в разные стороны</i>"
+    if meta and meta.get("side") in score:
+        # Авторитетная сторона от гейта — без противоречий с gate-строкой.
+        best = meta["side"]
+        best_score = score[best]
+    else:
+        if total_score == 0:
+            return ""  # только ненаправленные детекторы
+        best = max(score, key=lambda k: score[k])
+        best_score = score[best]
+        # Вердикт «противоречивый» — только в fallback без гейта.
+        if best_score / total_score < 0.55:
+            return ("📌 <b>Сигнал:</b> <i>противоречивый — детекторы "
+                    "указывают в разные стороны</i>")
 
     outcome_names = {
         "home": f"Победа хозяев ({escape(match.home_team)})",
@@ -332,7 +344,7 @@ def _format_message(match: MatchOdds, hits: list[AnomalyHit], score: float,
             lines.append(f"  💡 <i>{escape(explanation)}</i>")
         lines.append("")
 
-    signal = _format_signal(hits, match)
+    signal = _format_signal(hits, match, meta)
     if signal:
         lines += ["", signal]
 
