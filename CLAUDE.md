@@ -241,9 +241,20 @@ rate-limit ~133/мин, НЕ в пайплайне). Таблица `SstatsModel
 модель-vs-рынок (`/modelcal` ↔ `/calibration`) и лиго-зависимое доверие
 к `model_gap`. Brier/log-loss переиспользуются из `prob_calibration`.
 
+**Лиго-зависимое доверие (#3).** `refresh_model_trust` (ежечасно + на
+старте) классифицирует лиги по историческому Brier модели:
+`trusted` (Brier < 0.667 − `model_trust_uniform_margin`),
+`unreliable` (Brier ≥ 0.667), иначе `unknown` (или < `model_trust_min_samples`
+матчей). Лига протягивается из sstats `/Games/list` (`season.league`) в
+`XgPrediction.league` → в `payload` срабатывания `model_gap`
+(`league`, `model_trust`). `classify_signal` **исключает** `model_gap` из
+лиги `unreliable` из решения о «точном сигнале» (запись сохраняется,
+`meta.dropped_untrusted_model_gap`). `unknown`/`trusted` не гейтятся —
+cold-start безопасен.
+
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 146 тестов, 0 сетевых
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 150 тестов, 0 сетевых
 запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
 
 `conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но
@@ -268,6 +279,7 @@ tests/
 ├── test_prob_calibration.py         # Brier/log-loss против исходов
 ├── test_signal_gate.py              # precision-gate classify_signal
 ├── test_sstats_history.py           # бэкфилл калибровки модели sstats
+├── test_model_trust.py              # лиго-зависимое доверие модели (#3)
 ├── test_elo_bootstrap.py            # загрузка рейтингов с clubelo.com
 └── test_elo_draw_share.py           # динамическая доля ничьих
 ```

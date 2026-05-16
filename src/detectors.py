@@ -316,6 +316,7 @@ def detect_model_gap(session: Session, match: MatchOdds,
     Источник сохраняется в payload["source"].
     """
     from .probability import sharp_consensus_probabilities
+    from .sstats_history import league_model_trust
 
     if xg_pred is not None:
         fair_home = 1.0 / max(xg_pred.home_win_prob, 0.01)
@@ -327,6 +328,8 @@ def detect_model_gap(session: Session, match: MatchOdds,
             "away_xg": xg_pred.away_xg,
             "home_glicko": xg_pred.home_glicko,
             "away_glicko": xg_pred.away_glicko,
+            "league": xg_pred.league,
+            "model_trust": league_model_trust(xg_pred.league),
         }
     elif (sharp := sharp_consensus_probabilities(
             match, settings.model_gap_min_sharp_books)) is not None:
@@ -603,6 +606,19 @@ def classify_signal(hits: list[AnomalyHit]) -> tuple[str, dict]:
 
     from .clv import extract_bet_side
 
+    # model_gap из лиги с ненадёжной sstats-моделью не участвует в решении
+    # о «сигнале» (но сохраняется и помечается отдельно). См. #3.
+    dropped_untrusted = sum(
+        1 for h in hits
+        if h.detector == "model_gap"
+        and (h.payload or {}).get("model_trust") == "unreliable"
+    )
+    hits = [
+        h for h in hits
+        if not (h.detector == "model_gap"
+                and (h.payload or {}).get("model_trust") == "unreliable")
+    ]
+
     distinct = sorted({h.detector for h in hits})
     n = len(distinct)
     score = compute_score(hits)
@@ -622,6 +638,7 @@ def classify_signal(hits: list[AnomalyHit]) -> tuple[str, dict]:
         "mean_clv_mult": round(mean_mult, 2),
         "agreement": round(agreement, 2),
         "side": agreed_side,
+        "dropped_untrusted_model_gap": dropped_untrusted,
     }
 
     if not settings.signal_gate_enabled:

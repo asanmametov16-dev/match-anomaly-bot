@@ -43,6 +43,7 @@ class XgPrediction:
     away_win_prob: float
     home_glicko: float
     away_glicko: float
+    league: str | None = None  # для лиго-зависимого доверия model_gap (#3)
 
 
 @dataclass
@@ -51,9 +52,20 @@ class _IndexEntry:
     fetched_at: datetime
 
 
+def _extract_league(g: dict) -> str | None:
+    """«Страна — Лига» из элемента /Games/list (схема season.league)."""
+    sl = ((g.get("season") or {}).get("league") or {})
+    name = sl.get("name") or (g.get("league") or {}).get("name")
+    if not name:
+        return None
+    country = (sl.get("country") or {}).get("name")
+    return f"{country} — {name}" if country else name
+
+
 # Модуль-уровень кэш — переживает между циклами в одном процессе.
 _daily_indexes: dict[str, _IndexEntry] = {}
 _xg_cache: dict[int, tuple[datetime, XgPrediction | None]] = {}
+_game_league: dict[int, str] = {}  # sstats_id → "Страна — Лига"
 
 
 def _is_enabled() -> bool:
@@ -93,7 +105,10 @@ async def _fetch_day_index(client: httpx.AsyncClient, date_str: str) -> dict[tup
         if not (ht and at and gid):
             continue
         key = (normalize_team_name(ht), normalize_team_name(at))
-        index.setdefault(key, gid)  # при коллизии оставляем первый
+        if index.setdefault(key, gid) == gid:  # новая запись (не коллизия)
+            lg = _extract_league(g)
+            if lg:
+                _game_league[gid] = lg
 
     _daily_indexes[date_str] = _IndexEntry(index=index, fetched_at=datetime.now(timezone.utc))
     log.info("sstats: индекс на %s — %d матчей", date_str, len(index))
@@ -180,6 +195,7 @@ async def fetch_xg_batch(matches: Iterable) -> dict[str, XgPrediction]:
                     continue
                 pred = await _fetch_xg(client, sstats_id)
                 if pred is not None:
+                    pred.league = _game_league.get(sstats_id)
                     out[m.match_id] = pred
     except Exception as e:
         # Полная резервная защита — не должна срабатывать (вложенные блоки уже ловят),

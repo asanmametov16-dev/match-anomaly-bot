@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     sharp_weight: float = 1.0    # вес sharp-конторы в consensus_probabilities
     default_weight: float = 0.4  # вес остальных контор
 
+    # Лиго-зависимое доверие модели sstats (см. sstats_history.model_trust)
+    model_trust_min_samples: int = 50      # меньше истории → лига "unknown"
+    model_trust_uniform_margin: float = 0.02  # trusted: Brier < 0.667 − margin
+
     # Метод снятия маржи букмекера (см. probability.remove_overround)
     devig_method: str = "shin"  # "shin" (точнее) | "proportional" (для отката)
 

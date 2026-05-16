@@ -23,6 +23,7 @@ from .bot import build_application
 from .calibration import refresh_detector_weights
 from .clv import compute_pending_clv
 from .prob_calibration import compute_pending_calibration
+from .sstats_history import refresh_model_trust
 from .config import settings
 from .db import init_db
 from .elo_updater import update_elo_from_results
@@ -75,6 +76,8 @@ async def main() -> None:
     # Прогреваем CLV-калибровку весов из накопленной истории до первого цикла,
     # чтобы compute_score сразу использовал откалиброванные веса.
     refresh_detector_weights()
+    # Прогреваем лиго-зависимое доверие модели sstats (#3).
+    refresh_model_trust()
 
     # Telegram-приложение
     app = build_application()
@@ -123,6 +126,13 @@ async def main() -> None:
         max_instances=1,
         coalesce=True,
         id="prob_calibration",
+    )
+    scheduler.add_job(
+        refresh_model_trust,
+        IntervalTrigger(hours=1),
+        max_instances=1,
+        coalesce=True,
+        id="model_trust",
     )
 
     # Запуск всего: app.initialize / start, потом polling, потом scheduler.

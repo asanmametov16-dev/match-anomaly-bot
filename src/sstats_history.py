@@ -176,6 +176,62 @@ async def backfill(max_games: int = 1500, page_limit: int = 200,
     return written
 
 
+# --- Лиго-зависимое доверие модели (#3) -------------------------------------
+
+# Горячий кэш: league → "trusted" | "unreliable". Отсутствие = "unknown"
+# (мало истории или Brier в нейтральной зоне) — не гейтим.
+_trust: dict[str, str] = {}
+_UNIFORM_BRIER = 2.0 / 3.0
+
+
+def refresh_model_trust() -> dict[str, str]:
+    """Пересчитать доверие к модели по лигам из SstatsModelOutcome.
+
+    trusted   = Brier заметно ниже равномерного (модель информативна);
+    unreliable = Brier ≥ равномерного (модель не лучше монетки);
+    между / мало данных = не в кэше → "unknown" (нейтрально, не гейтим).
+    Вызывается шедулером ежечасно и на старте.
+    """
+    from sqlalchemy import func, select
+
+    margin = settings.model_trust_uniform_margin
+    min_n = settings.model_trust_min_samples
+    new: dict[str, str] = {}
+
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(
+                SstatsModelOutcome.league,
+                func.count(SstatsModelOutcome.game_id),
+                func.avg(SstatsModelOutcome.brier),
+            ).group_by(SstatsModelOutcome.league)
+        ).all()
+
+    for league, n, brier in rows:
+        if not league or int(n or 0) < min_n or brier is None:
+            continue
+        b = float(brier)
+        if b < _UNIFORM_BRIER - margin:
+            new[league] = "trusted"
+        elif b >= _UNIFORM_BRIER:
+            new[league] = "unreliable"
+        # нейтральная зона → не сохраняем (unknown)
+
+    _trust.clear()
+    _trust.update(new)
+    log.info("model_trust: %d лиг классифицировано (%d trusted, %d unreliable)",
+             len(new), sum(v == "trusted" for v in new.values()),
+             sum(v == "unreliable" for v in new.values()))
+    return dict(_trust)
+
+
+def league_model_trust(league: str | None) -> str:
+    """Доверие к sstats-модели в лиге: trusted | unreliable | unknown."""
+    if not league:
+        return "unknown"
+    return _trust.get(league, "unknown")
+
+
 def sstats_model_summary(top_leagues: int = 10) -> dict:
     """Агрегат калибровки модели: overall + по лигам (для /modelcal и #3)."""
     from sqlalchemy import func, select
