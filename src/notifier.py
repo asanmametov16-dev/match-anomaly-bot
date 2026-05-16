@@ -273,7 +273,27 @@ _SIGNAL_DISCLAIMER = (
 )
 
 
-def _format_message(match: MatchOdds, hits: list[AnomalyHit], score: float) -> str:
+_SIDE_RU = {"home": "П1 (хозяева)", "draw": "Х (ничья)", "away": "П2 (гости)"}
+
+
+def _format_gate_line(meta: dict | None) -> str:
+    """Компактная строка-обоснование precision-gate (почему это сигнал)."""
+    if not meta:
+        return ""
+    side = _SIDE_RU.get(meta.get("side") or "", "—")
+    parts = [
+        f"🧭 Сторона: <b>{side}</b>",
+        f"согласие {meta.get('agreement', 0) * 100:.0f}%",
+        f"детекторов {meta.get('n_detectors', 0)}",
+    ]
+    dropped = meta.get("dropped_untrusted_model_gap", 0)
+    if dropped:
+        parts.append(f"⚠️ отсеян model_gap×{dropped} (ненадёжная лига)")
+    return " · ".join(parts)
+
+
+def _format_message(match: MatchOdds, hits: list[AnomalyHit], score: float,
+                    meta: dict | None = None) -> str:
     if score >= 5:
         level_icon, level_text = "🎯", "высокая уверенность"
     elif score >= 3:
@@ -288,8 +308,11 @@ def _format_message(match: MatchOdds, hits: list[AnomalyHit], score: float) -> s
         f"🏆 {escape(match.sport_key)}",
         "",
         f"Сила сигнала: <b>{score:.1f}</b>  |  Детекторов: {len(hits)}",
-        "",
     ]
+    gate_line = _format_gate_line(meta)
+    if gate_line:
+        lines.append(gate_line)
+    lines.append("")
 
     by_detector: dict[str, list[AnomalyHit]] = defaultdict(list)
     for hit in sorted(hits, key=lambda h: -h.severity):
@@ -321,10 +344,11 @@ def _format_message(match: MatchOdds, hits: list[AnomalyHit], score: float) -> s
     return "\n".join(lines)
 
 
-async def send_alert(match: MatchOdds, hits: list[AnomalyHit], score: float = 0.0) -> None:
+async def send_alert(match: MatchOdds, hits: list[AnomalyHit], score: float = 0.0,
+                     meta: dict | None = None) -> None:
     if not hits or _bot is None:
         return
-    text = _format_message(match, hits, score)
+    text = _format_message(match, hits, score, meta)
     try:
         await _bot.send_message(
             chat_id=settings.telegram_chat_id,

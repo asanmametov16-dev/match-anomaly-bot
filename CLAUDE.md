@@ -255,7 +255,7 @@ cold-start безопасен.
 
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 156 тестов, 0 сетевых
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 160 тестов, 0 сетевых
 запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
 
 `conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но
@@ -282,6 +282,7 @@ tests/
 ├── test_sstats_history.py           # бэкфилл калибровки модели sstats
 ├── test_model_trust.py              # лиго-зависимое доверие модели (#3)
 ├── test_bot_helpers.py              # чистые хелперы bot.py
+├── test_notifier_helpers.py         # gate-строка алерта
 ├── test_elo_bootstrap.py            # загрузка рейтингов с clubelo.com
 └── test_elo_draw_share.py           # динамическая доля ничьих
 ```

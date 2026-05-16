@@ -132,7 +132,7 @@ async def run_once() -> None:
 
             # Precision-gate: классифицируем кластер и метим КАЖДУЮ запись
             # confidence (signal/weak). Слабые сохраняются, но не эскалируются.
-            label, _meta = classify_signal(alert_hits)
+            label, signal_meta = classify_signal(alert_hits)
             for hit in fresh_hits:
                 hit.payload = {**(hit.payload or {}), "signal_confidence": label}
                 _save_anomaly(session, match, hit)
@@ -146,7 +146,7 @@ async def run_once() -> None:
 
             if do_alert and alert_hits:
                 score = compute_score(alert_hits)
-                await send_alert(match, alert_hits, score)
+                await send_alert(match, alert_hits, score, signal_meta)
 
         session.commit()
 
