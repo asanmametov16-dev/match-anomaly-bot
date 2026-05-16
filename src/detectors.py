@@ -587,10 +587,14 @@ def compute_score(hits: list[AnomalyHit]) -> float:
     Базовый вес (DETECTOR_WEIGHTS) масштабируется CLV-множителем: детектор,
     чьи срабатывания исторически не подтверждались движением рынка, весит
     меньше. См. calibration.py.
+
+    Считаем по РАЗНЫМ детекторам, а не по хитам: один детектор, сработавший
+    на нескольких исходах (напр. spread на home+draw+away), не должен давать
+    кратный вес и искусственно добивать порог сигнала.
     """
     return sum(
-        DETECTOR_WEIGHTS.get(h.detector, 1.0) * detector_multiplier(h.detector)
-        for h in hits
+        DETECTOR_WEIGHTS.get(d, 1.0) * detector_multiplier(d)
+        for d in {h.detector for h in hits}
     )
 
 
@@ -628,15 +632,27 @@ def classify_signal(hits: list[AnomalyHit]) -> tuple[str, dict]:
     mults = [detector_multiplier(d) for d in distinct] or [1.0]
     mean_mult = sum(mults) / len(mults)
 
-    sides = [s for h in hits
-             if (s := extract_bet_side(h.detector, h.payload or {}))]
-    agreement, agreed_side = 0.0, None
-    if sides:
-        agreed_side, top = Counter(sides).most_common(1)[0]
-        agreement = top / len(sides)
+    # Голосуем ПО ДЕТЕКТОРАМ, а не по хитам: каждый направленный детектор
+    # даёт один голос (его мажоритарную сторону). Иначе один детектор с
+    # несколькими хитами тривиально доминирует, а agreement при единственном
+    # направленном хите всегда =1.0 (мнимый «100% консенсус»).
+    det_sides: dict[str, list[str]] = {}
+    for h in hits:
+        s = extract_bet_side(h.detector, h.payload or {})
+        if s:
+            det_sides.setdefault(h.detector, []).append(s)
+    det_votes = {d: Counter(v).most_common(1)[0][0] for d, v in det_sides.items()}
+
+    n_directional = len(det_votes)
+    agreement, agreed_side, side_detectors = 0.0, None, 0
+    if det_votes:
+        agreed_side, side_detectors = Counter(det_votes.values()).most_common(1)[0]
+        agreement = side_detectors / n_directional
 
     meta = {
         "n_detectors": n,
+        "n_directional": n_directional,
+        "side_detectors": side_detectors,
         "score": round(score, 2),
         "mean_clv_mult": round(mean_mult, 2),
         "agreement": round(agreement, 2),
@@ -652,7 +668,8 @@ def classify_signal(hits: list[AnomalyHit]) -> tuple[str, dict]:
         n >= settings.signal_min_detectors
         and score >= settings.signal_score_threshold
         and mean_mult >= settings.signal_min_clv_multiplier
-        and bool(sides)  # нужен actionable направленный консенсус
+        # направление подтверждено ≥N РАЗНЫМИ детекторами, не одним
+        and side_detectors >= settings.signal_min_directional
         and agreement >= settings.signal_min_agreement
     )
     label = "signal" if is_signal else "weak"

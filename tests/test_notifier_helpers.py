@@ -22,8 +22,10 @@ def test_empty_meta_returns_blank():
 
 def test_renders_side_agreement_detectors():
     line = _format_gate_line({"side": "home", "agreement": 1.0,
-                              "n_detectors": 3})
-    assert "П1" in line and "100%" in line and "детекторов 3" in line
+                              "n_detectors": 3, "n_directional": 2,
+                              "side_detectors": 2})
+    assert "П1" in line and "100%" in line
+    assert "2/2 направл." in line and "детекторов всего 3" in line
     assert "model_gap" not in line  # ничего не отсеяно
 
 

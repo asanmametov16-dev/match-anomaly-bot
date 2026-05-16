@@ -299,10 +299,13 @@ def _format_gate_line(meta: dict | None) -> str:
     if not meta:
         return ""
     side = _SIDE_RU.get(meta.get("side") or "", "—")
+    sd = meta.get("side_detectors", 0)
+    nd = meta.get("n_directional", 0)
     parts = [
         f"🧭 Сторона: <b>{side}</b>",
-        f"согласие {meta.get('agreement', 0) * 100:.0f}%",
-        f"детекторов {meta.get('n_detectors', 0)}",
+        f"за неё {sd}/{nd} направл. (согласие "
+        f"{meta.get('agreement', 0) * 100:.0f}%)",
+        f"детекторов всего {meta.get('n_detectors', 0)}",
     ]
     dropped = meta.get("dropped_untrusted_model_gap", 0)
     if dropped:

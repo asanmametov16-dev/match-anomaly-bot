@@ -8,7 +8,18 @@ import pytest
 
 import src.calibration as calib
 import src.detectors as det
-from src.detectors import AnomalyHit, classify_signal
+from src.detectors import AnomalyHit, classify_signal, compute_score
+
+
+@pytest.fixture
+def relaxed(monkeypatch):
+    """Детерминированные пороги: изолируем проверку направленности."""
+    monkeypatch.setattr(det.settings, "signal_gate_enabled", True)
+    monkeypatch.setattr(det.settings, "signal_min_detectors", 1)
+    monkeypatch.setattr(det.settings, "signal_score_threshold", 0.0)
+    monkeypatch.setattr(det.settings, "signal_min_clv_multiplier", 0.0)
+    monkeypatch.setattr(det.settings, "signal_min_agreement", 0.5)
+    monkeypatch.setattr(det.settings, "signal_min_directional", 2)
 
 
 @pytest.fixture(autouse=True)
@@ -88,3 +99,44 @@ def test_empty_cluster_weak_no_crash():
     label, meta = classify_signal([])
     assert label == "weak"
     assert meta["n_detectors"] == 0
+
+
+# --- доработка: ≥2 РАЗНЫХ направленных детектора + дедуп веса ---------------
+
+def test_single_directional_detector_weak(relaxed):
+    """Кейс O'Higgins: один направленный (sharp_move) + ненаправленный
+    объём. Всё прочее пройдено, но направление на 1 детекторе → weak."""
+    hits = [
+        _hit("sharp_move", {"outcome": "home"}),
+        _hit("spread", {"outcome": "home", "spread_pp": 9.0}),
+        _hit("spread", {"outcome": "away", "spread_pp": 8.0}),
+    ]
+    label, meta = classify_signal(hits)
+    assert meta["n_directional"] == 1
+    assert meta["side_detectors"] == 1
+    assert meta["agreement"] == pytest.approx(1.0)  # 1/1 — мнимое «100%»
+    assert label == "weak"  # side_detectors < signal_min_directional (2)
+
+
+def test_two_directional_detectors_signal(relaxed):
+    hits = [
+        _hit("sharp_move", {"outcome": "home"}),
+        _hit("drift", {"outcome": "home", "drift_pp": 5.0}),
+        _hit("spread", {"outcome": "away", "spread_pp": 8.0}),
+    ]
+    label, meta = classify_signal(hits)
+    assert meta["n_directional"] == 2
+    assert meta["side_detectors"] == 2
+    assert meta["side"] == "home"
+    assert label == "signal"
+
+
+def test_compute_score_dedupes_multi_hit_detector():
+    """spread на home+draw+away = 3 хита, но вес считается ОДИН раз."""
+    one = compute_score([_hit("spread", {"outcome": "home"})])
+    three = compute_score([
+        _hit("spread", {"outcome": "home"}),
+        _hit("spread", {"outcome": "draw"}),
+        _hit("spread", {"outcome": "away"}),
+    ])
+    assert three == pytest.approx(one)

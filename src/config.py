@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     signal_score_threshold: float = 4.0    # CLV-взвешенный compute_score
     signal_min_clv_multiplier: float = 1.0  # ср. CLV-множитель сработавших
     signal_min_agreement: float = 0.55     # доля лидирующего исхода (направление)
+    signal_min_directional: int = 2        # ≥N РАЗНЫХ направленных детекторов за сторону
 
     # Elo
     elo_k_factor: float = 20.0
