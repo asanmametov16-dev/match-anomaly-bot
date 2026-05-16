@@ -34,8 +34,11 @@ DETECTOR_WEIGHTS: dict[str, float] = {
 
 # Детекторы, которые попадают в Telegram-алерт.
 # exotic_spread слишком шумный — сохраняется в БД, но не алертится.
+# cross_market включён: он на детерминированном DNB-тождестве (не статистика),
+# ждать «созревания» незачем; не-направленный → только сила/количество.
 ALERT_DETECTORS: frozenset[str] = frozenset({
     "synchronized", "sharp_move", "drift", "spread", "model_gap",
+    "cross_market",
 })
 from typing import TYPE_CHECKING, Iterable
 
