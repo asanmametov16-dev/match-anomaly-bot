@@ -122,6 +122,29 @@ class AnomalyCLV(Base):
     computed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class ProbCalibration(Base):
+    """Калибровка консенсус-вероятностей против фактического исхода.
+
+    На каждый сыгранный матч с закрывающим снимком — одна строка: маржа-free
+    consensus-вероятности закрытия (p_home/p_draw/p_away), реальный исход,
+    Brier и log-loss. Агрегат отвечает на вопрос «насколько вообще верны
+    наши вероятности», отдельно от CLV (CLV про движение рынка, Brier про
+    правду). Sentinel-строка с NULL (нет результата за 96ч / нет 3-way
+    закрытия) — чтобы не пересчитывать матч на каждом прогоне.
+    """
+    __tablename__ = "prob_calibration"
+
+    match_id = Column(String, primary_key=True)
+    result_key = Column(String, index=True, nullable=True)
+    p_home = Column(Float, nullable=True)
+    p_draw = Column(Float, nullable=True)
+    p_away = Column(Float, nullable=True)
+    actual = Column(String, nullable=True)   # home / draw / away или NULL sentinel
+    brier = Column(Float, nullable=True)     # многоклассовый Brier ∈ [0, 2]
+    log_loss = Column(Float, nullable=True)  # −ln p(факт), клипован
+    scored_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 engine = create_engine(settings.db_url, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 

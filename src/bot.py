@@ -25,6 +25,7 @@ from .db import (Anomaly, AnomalyCLV, AnomalyOutcome, OddsSnapshot,
                  ResultNotification, SessionLocal, TeamRating)
 from .detectors import DETECTOR_WEIGHTS
 from .elo import _normalize as normalize_team
+from .prob_calibration import calibration_summary
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/stats — общая статистика\n"
         "/accuracy — точность детекторов\n"
         "/clv — closing line value по детекторам\n"
+        "/calibration — точность вероятностей (Brier)\n"
         "/weights — веса детекторов (калибровка по CLV)\n"
         "/recent [N] — последние N аномалий\n"
         "/thresholds — текущие пороги\n"
@@ -249,6 +251,50 @@ async def cmd_clv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+async def cmd_calibration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Калибровка консенсус-вероятностей против реальных исходов."""
+    if not _is_authorized(update):
+        return
+
+    s = calibration_summary()
+    lines = ["🎯 <b>Калибровка вероятностей</b>", ""]
+
+    if s["n"] == 0:
+        lines.append("<i>Пока нет оценённых матчей — считается после "
+                      "результатов.</i>")
+        if s.get("pending"):
+            lines.append(f"<i>В очереди без результата: {s['pending']}</i>")
+        await update.message.reply_text("\n".join(lines),
+                                        parse_mode=ParseMode.HTML)
+        return
+
+    brier = s["mean_brier"]
+    unif = s["uniform_brier"]
+    mark = "🟢" if brier < unif - 0.05 else ("🟡" if brier < unif else "🔴")
+    lines += [
+        f"матчей: <b>{s['n']}</b>  (в очереди: {s['pending']})",
+        f"{mark} Brier: <b>{brier:.4f}</b>  "
+        f"<i>(равномерный {unif:.3f}; рынок ≈0.55–0.58)</i>",
+        f"log-loss: <b>{s['mean_log_loss']:.4f}</b>",
+        "",
+        "<b>Кривая надёжности</b> <i>(предсказ. → факт.частота)</i>:",
+    ]
+    for b in s["bins"]:
+        gap = b["emp_freq"] - b["mean_pred"]
+        flag = "✓" if abs(gap) < 0.05 else ("↑" if gap > 0 else "↓")
+        lines.append(
+            f"[{b['lo']:.1f}–{b['hi']:.1f}] n={b['n']:<4d} "
+            f"пред={b['mean_pred']:.3f} факт={b['emp_freq']:.3f} {flag}"
+        )
+
+    lines += [
+        "",
+        "<i>Brier &lt; равномерного = рынок информативен. ↑/↓ = бин "
+        "недо/переоценён, ✓ = калибровано (±5пп).</i>",
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
 async def cmd_weights(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Текущие веса детекторов: базовый × CLV-множитель = эффективный."""
     if not _is_authorized(update):
@@ -366,6 +412,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("accuracy", cmd_accuracy))
     app.add_handler(CommandHandler("clv", cmd_clv))
+    app.add_handler(CommandHandler("calibration", cmd_calibration))
     app.add_handler(CommandHandler("weights", cmd_weights))
     app.add_handler(CommandHandler("recent", cmd_recent))
     app.add_handler(CommandHandler("thresholds", cmd_thresholds))

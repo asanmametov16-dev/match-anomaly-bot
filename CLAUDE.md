@@ -29,8 +29,9 @@ src/
 ├── detectors.py       # 6 детекторов: spread, drift, synchronized, model_gap, exotic_spread, sharp_move
 ├── clv.py             # closing line value: оценка сигнальной ценности алертов
 ├── calibration.py     # CLV → множители весов детекторов (compute_score)
+├── prob_calibration.py # Brier/log-loss консенсуса против реальных исходов
 ├── notifier.py        # отправка алертов в Telegram (использует общий Bot)
-├── bot.py             # команды: /stats /accuracy /clv /weights /recent /thresholds /elo
+├── bot.py             # команды: /stats /accuracy /clv /calibration /weights /recent /thresholds /elo
 └── pipeline.py        # один цикл: fetch → xG-обогащение → детект → save → alert
 ```
 
@@ -179,9 +180,23 @@ sentinel-строку с NULL — `compute_pending_clv` (ежечасный дж
 прогреваются на старте и видны командой `/weights`. Отключается флагом
 `clv_calibration_enabled=false`.
 
+### Калибровка вероятностей по исходам (Brier)
+
+`prob_calibration.py` отвечает на другой вопрос, чем CLV: **насколько
+вообще верны наши вероятности?** Берётся маржа-free consensus закрывающей
+линии (та же точка, что у CLV), нормируется и сравнивается с фактическим
+1X2-исходом через многоклассовый Brier (∈[0,2]) и log-loss. Джоб
+`compute_pending_calibration` (каждые 2ч) идемпотентен; матч без
+результата/3-way закрытия после 96ч пишет sentinel-строку. Команда
+`/calibration` показывает средний Brier, log-loss и кривую надёжности
+(предсказанная p против эмпирической частоты по бинам). Ориентиры:
+равномерный прогноз ⇒ Brier 0.667; информативный рынок 1X2 ≈ 0.55–0.58.
+Это диагностика de-vig/консенсуса — Shin должен давать Brier ниже
+пропорционального.
+
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 112 тестов, 0 сетевых
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 122 теста, 0 сетевых
 запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
 
 `conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но
@@ -201,6 +216,7 @@ tests/
 ├── test_sstats_client.py            # sstats клиент (mock transport)
 ├── test_clv.py                      # closing line value
 ├── test_calibration.py              # CLV → веса детекторов
+├── test_prob_calibration.py         # Brier/log-loss против исходов
 ├── test_elo_bootstrap.py            # загрузка рейтингов с clubelo.com
 └── test_elo_draw_share.py           # динамическая доля ничьих
 ```

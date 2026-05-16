@@ -22,6 +22,7 @@ from telegram.error import NetworkError
 from .bot import build_application
 from .calibration import refresh_detector_weights
 from .clv import compute_pending_clv
+from .prob_calibration import compute_pending_calibration
 from .config import settings
 from .db import init_db
 from .elo_updater import update_elo_from_results
@@ -115,6 +116,13 @@ async def main() -> None:
         max_instances=1,
         coalesce=True,
         id="weight_calibration",
+    )
+    scheduler.add_job(
+        compute_pending_calibration,
+        IntervalTrigger(hours=2),
+        max_instances=1,
+        coalesce=True,
+        id="prob_calibration",
     )
 
     # Запуск всего: app.initialize / start, потом polling, потом scheduler.
