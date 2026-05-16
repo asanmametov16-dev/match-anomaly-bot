@@ -112,9 +112,16 @@ async def check_anomaly_results() -> None:
         return
 
     with SessionLocal() as session:
-        # Сохраняем свежие результаты в БД
+        # Сохраняем свежие результаты в БД. seen_keys ловит дубли В ПРЕДЕЛАХ
+        # фетча (два матча с одинаковым нормализованным ключом, перекрытие
+        # football-data ↔ sstats, повтор страниц) — session.get их не видит,
+        # пока сессия не сфлашена → иначе UNIQUE constraint на батче.
+        seen_keys: set[str] = set()
         for m in finished:
             key = _result_key(m.home_team, m.away_team, m.utc_date)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             if session.get(MatchResult, key) is None:
                 session.add(MatchResult(
                     result_key=key,
