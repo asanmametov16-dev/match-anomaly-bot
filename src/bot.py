@@ -61,6 +61,19 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await cmd_start(update, context)
 
 
+_CONF_MARK = {"signal": "🎯", "weak": "💤"}
+
+
+def _conf_label(payload: dict | None) -> tuple[str, str]:
+    """(маркер, текст) по payload['signal_confidence']. None → нейтрально."""
+    c = (payload or {}).get("signal_confidence")
+    if c == "signal":
+        return "🎯", "signal"
+    if c == "weak":
+        return "💤", "weak"
+    return "·", "—"
+
+
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
@@ -77,6 +90,15 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             select(Anomaly.detector, func.count(Anomaly.id))
             .group_by(Anomaly.detector)
         ).all()
+
+        # Precision-gate: разбивка записей по signal_confidence
+        conf_rows = session.execute(
+            select(
+                func.json_extract(Anomaly.payload, "$.signal_confidence"),
+                func.count(Anomaly.id),
+            ).group_by(func.json_extract(Anomaly.payload, "$.signal_confidence"))
+        ).all()
+        conf_counts = {(k or "—"): c for k, c in conf_rows}
 
         # Статистика сигналов по результатам
         outcomes = session.execute(select(AnomalyOutcome)).scalars().all()
@@ -118,6 +140,11 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append("  (пока нет срабатываний)")
 
     lines += [
+        "",
+        "<b>Precision-gate (записи):</b>",
+        f"  🎯 signal: <b>{conf_counts.get('signal', 0)}</b>"
+        f"   💤 weak: <b>{conf_counts.get('weak', 0)}</b>"
+        f"   · без метки: {conf_counts.get('—', 0)}",
         "",
         "<b>Сигналы (сыгранные матчи):</b>",
         f"  Всего проверено: <b>{sig_total}</b>",
@@ -396,9 +423,10 @@ async def cmd_recent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     lines = [f"📋 <b>Последние {len(rows)} аномалий:</b>", ""]
     for a in rows:
         when = a.detected_at.strftime("%m-%d %H:%M")
+        mark, conf = _conf_label(a.payload)
         lines.append(
-            f"<b>{escape(a.home_team)} — {escape(a.away_team)}</b>\n"
-            f"  {when} · {a.detector} · severity={a.severity:.2f}\n"
+            f"{mark} <b>{escape(a.home_team)} — {escape(a.away_team)}</b>\n"
+            f"  {when} · {a.detector} · severity={a.severity:.2f} · {conf}\n"
             f"  <i>{escape(a.details or '')}</i>"
         )
     await update.message.reply_text("\n\n".join(lines), parse_mode=ParseMode.HTML)
