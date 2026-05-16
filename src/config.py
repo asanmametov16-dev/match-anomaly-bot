@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     odds_api_sport: str = "soccer"
     odds_api_markets: str = "h2h,totals,spreads"
     football_data_key: str = ""  # пусто = не обновлять Elo автоматически
+    sstats_api_key: str = ""     # пусто = sstats обогащение выключено
+    sstats_enabled: bool = True  # явный switch на случай аварийного откл.
 
     # Telegram
     telegram_bot_token: str

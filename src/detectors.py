@@ -36,7 +36,7 @@ DETECTOR_WEIGHTS: dict[str, float] = {
 ALERT_DETECTORS: frozenset[str] = frozenset({
     "synchronized", "sharp_move", "drift", "spread", "model_gap",
 })
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -45,6 +45,9 @@ from .config import settings
 from .db import OddsSnapshot
 from .elo import fair_odds_1x2, get_rating
 from .odds_client import BookmakerOdds, MatchOdds
+
+if TYPE_CHECKING:
+    from .sstats_client import XgPrediction
 
 
 @dataclass
@@ -300,23 +303,41 @@ def detect_synchronized(session: Session, match: MatchOdds) -> list[AnomalyHit]:
 
 # --- Детектор 4: расхождение с моделью --------------------------------------
 def detect_model_gap(session: Session, match: MatchOdds,
-                     current_medians: dict[str, float | None]) -> list[AnomalyHit]:
-    """Сравнивает рыночные коэффициенты с 'честными' от Elo-модели.
+                     current_medians: dict[str, float | None],
+                     xg_pred: "XgPrediction | None" = None) -> list[AnomalyHit]:
+    """Сравнивает рыночные коэффициенты с 'честными' от модели.
 
-    Внимание: пока рейтинги не откалибровались, шумит. См. комментарий в elo.py.
+    Если передан xg_pred (от sstats.net) — берём fair_odds из его winProb;
+    это гораздо точнее наивного Elo с cold-start. Иначе fallback на Elo.
+    Источник модели сохраняется в payload["source"] ∈ {"sstats_xg", "elo"}.
     """
-    rating_home = get_rating(session, match.home_team)
-    rating_away = get_rating(session, match.away_team)
-    fair = fair_odds_1x2(rating_home, rating_away)
+    if xg_pred is not None:
+        fair_home = 1.0 / max(xg_pred.home_win_prob, 0.01)
+        fair_draw = 1.0 / max(xg_pred.draw_prob, 0.01)
+        fair_away = 1.0 / max(xg_pred.away_win_prob, 0.01)
+        source = "sstats_xg"
+        model_info: dict = {
+            "home_xg": xg_pred.home_xg,
+            "away_xg": xg_pred.away_xg,
+            "home_glicko": xg_pred.home_glicko,
+            "away_glicko": xg_pred.away_glicko,
+        }
+    else:
+        rating_home = get_rating(session, match.home_team)
+        rating_away = get_rating(session, match.away_team)
+        fair = fair_odds_1x2(rating_home, rating_away)
+        fair_home, fair_draw, fair_away = fair.home, fair.draw, fair.away
+        source = "elo"
+        model_info = {"rating_home": rating_home, "rating_away": rating_away}
 
     multiplier, bucket_label = _time_bucket_info(match)
     threshold = settings.model_gap_threshold * multiplier
 
     hits: list[AnomalyHit] = []
     pairs = [
-        ("home", fair.home, current_medians.get("home")),
-        ("draw", fair.draw, current_medians.get("draw")),
-        ("away", fair.away, current_medians.get("away")),
+        ("home", fair_home, current_medians.get("home")),
+        ("draw", fair_draw, current_medians.get("draw")),
+        ("away", fair_away, current_medians.get("away")),
     ]
     for outcome, fair_price, market in pairs:
         if market is None or market <= 1.0:
@@ -327,13 +348,13 @@ def detect_model_gap(session: Session, match: MatchOdds,
                 detector="model_gap",
                 severity=gap,
                 description=(
-                    f"Расхождение с моделью по {outcome}: "
+                    f"Расхождение с моделью ({source}) по {outcome}: "
                     f"рынок {market:.2f}, модель {fair_price:.2f} "
                     f"({gap*100:.1f}%) [корзина {bucket_label}, эфф. {threshold*100:.0f}%]"
                 ),
                 payload={"outcome": outcome, "market": market, "fair": fair_price,
-                         "rating_home": rating_home, "rating_away": rating_away,
-                         "bucket_label": bucket_label},
+                         "source": source, "bucket_label": bucket_label,
+                         **model_info},
             ))
     return hits
 
