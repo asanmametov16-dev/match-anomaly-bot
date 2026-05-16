@@ -20,7 +20,8 @@ from telegram.ext import (Application, CommandHandler, ContextTypes,
                           filters)
 
 from .config import settings
-from .db import Anomaly, AnomalyOutcome, OddsSnapshot, ResultNotification, SessionLocal, TeamRating
+from .db import (Anomaly, AnomalyCLV, AnomalyOutcome, OddsSnapshot,
+                 ResultNotification, SessionLocal, TeamRating)
 from .elo import _normalize as normalize_team
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Команды:\n"
         "/stats — общая статистика\n"
         "/accuracy — точность детекторов\n"
+        "/clv — closing line value по детекторам\n"
         "/recent [N] — последние N аномалий\n"
         "/thresholds — текущие пороги\n"
         "/elo <команда> — Elo-рейтинг\n"
@@ -182,6 +184,68 @@ async def cmd_accuracy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+async def cmd_clv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Closing line value по детекторам — единственная честная метрика сигнала."""
+    if not _is_authorized(update):
+        return
+
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(AnomalyCLV).where(AnomalyCLV.clv_pp.isnot(None))
+        ).scalars().all()
+        non_dir = session.scalar(
+            select(func.count(AnomalyCLV.anomaly_id))
+            .where(AnomalyCLV.side.is_(None))
+        ) or 0
+        no_data = session.scalar(
+            select(func.count(AnomalyCLV.anomaly_id))
+            .where(AnomalyCLV.side.isnot(None))
+            .where(AnomalyCLV.clv_pp.is_(None))
+        ) or 0
+
+    by_detector: dict[str, list[float]] = {}
+    for r in rows:
+        by_detector.setdefault(r.detector, []).append(r.clv_pp)
+
+    lines = ["📈 <b>CLV (closing line value)</b>", ""]
+    if not by_detector:
+        lines.append("<i>Пока нет данных — CLV считается после старта матча.</i>")
+    else:
+        lines.append("<i>+CLV: рынок двинулся дальше в сторону прогноза.</i>")
+        lines.append("")
+        for det, vals in sorted(by_detector.items(), key=lambda kv: -len(kv[1])):
+            n = len(vals)
+            mean = sum(vals) / n
+            pos_pct = sum(1 for v in vals if v > 0) / n * 100
+            if n >= 2:
+                var = sum((v - mean) ** 2 for v in vals) / (n - 1)
+                sigma_str = f"σ={var ** 0.5:.1f}"
+            else:
+                sigma_str = "σ=—"
+            if n < 10:
+                marker, note = "⚪", "  <i>(n&lt;10, мало)</i>"
+            elif mean > 0.5:
+                marker, note = "🟢", ""
+            elif mean < -0.5:
+                marker, note = "🔴", ""
+            else:
+                marker, note = "🟡", ""
+            lines.append(
+                f"{marker} <b>{escape(det)}</b>: "
+                f"n={n}  mean={mean:+.2f}пп  pos%={pos_pct:.0f}%  {sigma_str}{note}"
+            )
+
+    lines += [
+        "",
+        f"<i>Без CLV: {non_dir} не-направленных + {no_data} без снимков</i>",
+        "<i>🟢 mean&gt;+0.5пп при n≥10  🟡 около нуля  🔴 mean&lt;−0.5пп</i>",
+        "<i>Положительный CLV — необходимое, но не достаточное условие "
+        "прибыльности (нужно ещё перекрыть маржу букмекера и vig).</i>",
+    ]
+
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
 async def cmd_recent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
@@ -259,6 +323,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("accuracy", cmd_accuracy))
+    app.add_handler(CommandHandler("clv", cmd_clv))
     app.add_handler(CommandHandler("recent", cmd_recent))
     app.add_handler(CommandHandler("thresholds", cmd_thresholds))
     app.add_handler(CommandHandler("elo", cmd_elo))

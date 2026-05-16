@@ -100,6 +100,28 @@ class Anomaly(Base):
     payload = Column(JSON)                     # сырые данные для разбора
 
 
+class AnomalyCLV(Base):
+    """Closing Line Value по одному срабатыванию аномалии.
+
+    Сравнивает консенсус-вероятность «ставочной стороны» в момент алерта
+    и в последнем снимке до старта матча. Положительный clv_pp = рынок
+    двинулся дальше в сторону, на которую указывал детектор — реальный
+    индикатор сигнальной ценности (golden standard в проф. ставочной аналитике).
+
+    Поля nullable: для не-направленных детекторов (spread, exotic_spread)
+    или когда нет снимка закрытия — пишем строку с NULL, чтобы не пересчитывать.
+    """
+    __tablename__ = "anomaly_clv"
+
+    anomaly_id = Column(Integer, primary_key=True)  # = Anomaly.id
+    detector = Column(String, nullable=False, index=True)
+    side = Column(String, nullable=True)            # home / draw / away или NULL
+    prob_at_alert = Column(Float, nullable=True)
+    prob_at_close = Column(Float, nullable=True)
+    clv_pp = Column(Float, nullable=True)           # (close - alert) в процентных пунктах
+    computed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 engine = create_engine(settings.db_url, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 

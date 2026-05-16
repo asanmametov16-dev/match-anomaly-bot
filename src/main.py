@@ -20,6 +20,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from telegram.error import NetworkError
 
 from .bot import build_application
+from .clv import compute_pending_clv
 from .config import settings
 from .db import init_db
 from .elo_updater import update_elo_from_results
@@ -95,6 +96,13 @@ async def main() -> None:
         max_instances=1,
         coalesce=True,
         id="result_check",
+    )
+    scheduler.add_job(
+        compute_pending_clv,
+        IntervalTrigger(hours=1),
+        max_instances=1,
+        coalesce=True,
+        id="clv_compute",
     )
 
     # Запуск всего: app.initialize / start, потом polling, потом scheduler.
