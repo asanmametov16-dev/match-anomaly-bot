@@ -66,11 +66,12 @@ python -m src.main
   полностью (нет `quota.py`, нет проверок в `pipeline.py`).
   `POLL_INTERVAL_MINUTES=15` теперь допустимо. Если тариф снова станет
   лимитированным — восстанавливать счётчик квоты заново.
-- **`model_gap`: сначала sstats, fallback на Elo.** Если есть `SSTATS_API_KEY`
-  и матч покрыт sstats.net — fair-odds берутся из xG/winProb (точно с первого
-  дня). Без покрытия — fallback на Elo, который шумит первые 1–2 недели, пока
-  рейтинги не наберут статистику (порог по умолчанию 0.20). Источник модели
-  пишется в `payload["source"]` ∈ {`sstats_xg`, `elo`}.
+- **`model_gap`: трёхуровневый fallback модели.** Приоритет (точность
+  убывает): (1) sstats.net xG/winProb при наличии `SSTATS_API_KEY` и
+  покрытия; (2) маржа-free консенсус sharp-контор (доступен с первого дня,
+  точнее холодного Elo) — нужно ≥ `model_gap_min_sharp_books` (2) sharp-книг
+  с полным 1X2; (3) Elo как последний резерв (шумит 1–2 недели). Источник
+  пишется в `payload["source"]` ∈ {`sstats_xg`, `sharp_consensus`, `elo`}.
 - **Нормализация имён команд.** Odds API и football-data.org называют
   команды по-разному ("Manchester United" vs "Manchester United FC").
   В `elo.py` есть `_normalize`, в `results_client.py` — `normalize_team_name`.
@@ -196,7 +197,7 @@ sentinel-строку с NULL — `compute_pending_clv` (ежечасный дж
 
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 122 теста, 0 сетевых
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 127 тестов, 0 сетевых
 запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
 
 `conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но
@@ -212,6 +213,7 @@ tests/
 ├── test_detectors_synchronized.py   # sharp-фильтр для synchronized
 ├── test_detectors_time_bucket.py    # временны́е корзины
 ├── test_detectors_model_gap_xg.py   # model_gap: xG-путь и Elo-fallback
+├── test_detectors_model_gap_sharp.py # model_gap: sharp-консенсус fallback
 ├── test_probability_weights.py      # веса букмекеров, weighted median
 ├── test_sstats_client.py            # sstats клиент (mock transport)
 ├── test_clv.py                      # closing line value

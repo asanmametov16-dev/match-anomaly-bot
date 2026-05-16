@@ -166,6 +166,44 @@ def consensus_probabilities(match: "MatchOdds") -> dict[str, float] | None:
     return result if result else None
 
 
+def sharp_consensus_probabilities(
+    match: "MatchOdds", min_books: int = 2
+) -> dict[str, float] | None:
+    """Маржа-free медиана вероятностей ТОЛЬКО по sharp-конторам.
+
+    Используется как референс-модель для detect_model_gap вместо холодного
+    Elo: sharp-консенсус доступен с первого дня и точнее наивного рейтинга,
+    пока тот не набрал статистику. Возвращает None, если sharp-контор с
+    валидными ценами меньше min_books или нет полного 1X2 — тогда caller
+    откатывается на Elo.
+    """
+    sharp_set = {b.lower() for b in settings.sharp_bookmakers}
+    by_outcome: dict[str, list[float]] = {"home": [], "draw": [], "away": []}
+    used = 0
+
+    for bm in match.bookmakers:
+        if bm.bookmaker.lower() not in sharp_set:
+            continue
+        probs = probabilities_from_match(bm)
+        if probs is None:
+            continue
+        used += 1
+        for outcome, p in probs.items():
+            by_outcome[outcome].append(p)
+
+    if used < min_books:
+        return None
+
+    result: dict[str, float] = {}
+    for outcome, vals in by_outcome.items():
+        if vals:
+            result[outcome] = _weighted_median(vals, [1.0] * len(vals))
+
+    if not all(o in result for o in ("home", "draw", "away")):
+        return None
+    return result
+
+
 def probabilities_to_odds(probs: dict[str, float]) -> dict[str, float]:
     """Convert margin-free probabilities back to decimal odds for display."""
     return {k: 1.0 / v for k, v in probs.items() if v > 0}

@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     drift_window_minutes: int = 120         # сравниваем с самым старым снимком в этом окне
     drift_pp_threshold: float = 5.0         # порог движения в процентных пунктах
     model_gap_threshold: float = 0.20
+    model_gap_min_sharp_books: int = 2  # минимум sharp-контор для sharp-fallback
     sync_move_threshold: float = 0.05      # сдвиг у одного букмекера для счёта
     sync_min_bookmakers: int = 3           # минимум контор, двинувших одновременно
     exotic_spread_threshold: float = 0.10  # для тоталов и фор

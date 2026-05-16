@@ -308,10 +308,14 @@ def detect_model_gap(session: Session, match: MatchOdds,
                      xg_pred: "XgPrediction | None" = None) -> list[AnomalyHit]:
     """Сравнивает рыночные коэффициенты с 'честными' от модели.
 
-    Если передан xg_pred (от sstats.net) — берём fair_odds из его winProb;
-    это гораздо точнее наивного Elo с cold-start. Иначе fallback на Elo.
-    Источник модели сохраняется в payload["source"] ∈ {"sstats_xg", "elo"}.
+    Приоритет референс-модели (точность убывает):
+      1. xg_pred (sstats.net winProb)          → source "sstats_xg"
+      2. маржа-free консенсус sharp-контор      → source "sharp_consensus"
+      3. Elo (холодный старт, шумит 1-2 недели) → source "elo"
+    Источник сохраняется в payload["source"].
     """
+    from .probability import sharp_consensus_probabilities
+
     if xg_pred is not None:
         fair_home = 1.0 / max(xg_pred.home_win_prob, 0.01)
         fair_draw = 1.0 / max(xg_pred.draw_prob, 0.01)
@@ -322,6 +326,17 @@ def detect_model_gap(session: Session, match: MatchOdds,
             "away_xg": xg_pred.away_xg,
             "home_glicko": xg_pred.home_glicko,
             "away_glicko": xg_pred.away_glicko,
+        }
+    elif (sharp := sharp_consensus_probabilities(
+            match, settings.model_gap_min_sharp_books)) is not None:
+        fair_home = 1.0 / max(sharp["home"], 0.01)
+        fair_draw = 1.0 / max(sharp["draw"], 0.01)
+        fair_away = 1.0 / max(sharp["away"], 0.01)
+        source = "sharp_consensus"
+        model_info = {
+            "sharp_p_home": sharp["home"],
+            "sharp_p_draw": sharp["draw"],
+            "sharp_p_away": sharp["away"],
         }
     else:
         rating_home = get_rating(session, match.home_team)
