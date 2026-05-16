@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     sync_move_threshold: float = 0.05      # сдвиг у одного букмекера для счёта
     sync_min_bookmakers: int = 3           # минимум контор, двинувших одновременно
     exotic_spread_threshold: float = 0.10  # для тоталов и фор
+    cross_market_pp_threshold: float = 4.0  # h2h-DNB vs AH-0.0, проц. пункты
+    cross_market_min_books: int = 3         # минимум контор с форой 0.0
     sharp_move_threshold: float = 0.05    # разрыв sharp vs soft (5%)
 
     # Веса букмекеров: sharp-конторы первыми двигают рынок и отражают «умные деньги»

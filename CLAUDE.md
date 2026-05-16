@@ -26,7 +26,7 @@ src/
 ├── elo_updater.py     # ежедневный джоб обновления Elo по результатам
 ├── probability.py     # утилиты: implied_prob, remove_overround, consensus_probabilities
 ├── sstats_client.py   # клиент sstats.net: xG/winProb/Glicko для model_gap
-├── detectors.py       # 6 детекторов: spread, drift, synchronized, model_gap, exotic_spread, sharp_move
+├── detectors.py       # 7 детекторов: spread, drift, synchronized, model_gap, exotic_spread, sharp_move, cross_market
 ├── clv.py             # closing line value: оценка сигнальной ценности алертов
 ├── calibration.py     # CLV → множители весов детекторов (compute_score)
 ├── prob_calibration.py # Brier/log-loss консенсуса против реальных исходов
@@ -195,9 +195,22 @@ sentinel-строку с NULL — `compute_pending_clv` (ежечасный дж
 Это диагностика de-vig/консенсуса — Shin должен давать Brier ниже
 пропорционального.
 
+### Межрыночная согласованность (cross_market)
+
+`detect_cross_market` использует **тождество**, а не модель: фора 0.0
+(level ball) = Draw-No-Bet, поэтому её маржа-free вероятность по home
+обязана равняться `p_home/(p_home+p_away)` из 1X2. Сравнивается консенсус
+1X2 с медианой DNB по форе 0.0 (≥ `cross_market_min_books` контор);
+расхождение в пп сверх `cross_market_pp_threshold` (× time-bucket) =
+сигнал устаревшей линии/ошибки в одном из рынков. Ортогонален одиночным
+детекторам, не-направленный (как spread/exotic). Пока **не алертится**
+(нет в `ALERT_DETECTORS`, как `exotic_spread`): сохраняется и скорится,
+а CLV-калибровка весов (#1) сама поднимет/опустит его вес по факту.
+No-op без форы 0.0 — лучше молчать, чем шуметь.
+
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 127 тестов, 0 сетевых
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 133 теста, 0 сетевых
 запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
 
 `conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но
@@ -212,6 +225,7 @@ tests/
 ├── test_detectors_drift.py          # скользящее окно дрейфа
 ├── test_detectors_synchronized.py   # sharp-фильтр для synchronized
 ├── test_detectors_time_bucket.py    # временны́е корзины
+├── test_detectors_cross_market.py   # h2h vs фора 0.0 (DNB-тождество)
 ├── test_detectors_model_gap_xg.py   # model_gap: xG-путь и Elo-fallback
 ├── test_detectors_model_gap_sharp.py # model_gap: sharp-консенсус fallback
 ├── test_probability_weights.py      # веса букмекеров, weighted median

@@ -9,7 +9,8 @@ from sqlalchemy import func, select
 from .config import settings
 from .db import Anomaly, OddsSnapshot, SessionLocal
 from .detectors import (ALERT_DETECTORS, AnomalyHit, compute_score,
-                        detect_drift, detect_exotic_spread, detect_model_gap,
+                        detect_cross_market, detect_drift,
+                        detect_exotic_spread, detect_model_gap,
                         detect_sharp_move, detect_spread, detect_synchronized,
                         _median)
 from .notifier import send_alert
@@ -117,6 +118,7 @@ async def run_once() -> None:
                                      xg_pred=xg_predictions.get(match.match_id))
             hits += detect_sharp_move(match)
             hits += detect_exotic_spread(match)
+            hits += detect_cross_market(match)
 
             # Дедупликация: не отправляем повторно срабатывание того же
             # детектора по тому же матчу в течение DEDUP_WINDOW

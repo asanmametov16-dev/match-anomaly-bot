@@ -29,6 +29,7 @@ DETECTOR_WEIGHTS: dict[str, float] = {
     "spread":       1.0,
     "model_gap":    1.0,
     "exotic_spread": 1.0,
+    "cross_market": 1.0,
 }
 
 # Детекторы, которые попадают в Telegram-алерт.
@@ -496,6 +497,82 @@ def detect_exotic_spread(match: MatchOdds) -> list[AnomalyHit]:
                          "bucket_label": bucket_label},
             ))
     return hits
+
+
+# --- Детектор 7: cross_market — h2h vs азиатская фора 0.0 ------------------
+def detect_cross_market(match: MatchOdds) -> list[AnomalyHit]:
+    """Межрыночная несогласованность: 1X2 против азиатской форы на линии 0.0.
+
+    Фора 0.0 (level ball) = Draw-No-Bet: при ничьей ставка возвращается.
+    Значит её маржа-free вероятность по home обязана совпадать с DNB,
+    выведенной из 1X2: p_home / (p_home + p_away). Это **тождество**, а не
+    модель — расхождение указывает на устаревшую линию/ошибку в одном из
+    рынков. Ортогонально одиночным детекторам и почти без ложных
+    срабатываний; не-направленный (как spread/exotic).
+
+    No-op, если форы 0.0 нет хотя бы у cross_market_min_books контор или
+    не считается консенсус 1X2 — лучше молчать, чем шуметь.
+    """
+    from .probability import consensus_probabilities, remove_overround
+
+    h2h = consensus_probabilities(match)
+    if not h2h or h2h.get("home") is None or h2h.get("away") is None:
+        return []
+    denom = h2h["home"] + h2h["away"]
+    if denom <= 0:
+        return []
+    dnb_h2h = h2h["home"] / denom
+
+    dnb_ah: list[float] = []
+    for bm in match.bookmakers:
+        if not bm.spreads:
+            continue
+        price_h = price_a = None
+        for item in bm.spreads:
+            point, name, price = item.get("point"), item.get("name"), item.get("price")
+            if price is None or price <= 1.0 or point is None:
+                continue
+            try:
+                if abs(float(point)) > 1e-9:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            if name == match.home_team:
+                price_h = price
+            elif name == match.away_team:
+                price_a = price
+        if price_h and price_a:
+            tw = remove_overround({"home": 1.0 / price_h, "away": 1.0 / price_a})
+            dnb_ah.append(tw["home"])
+
+    if len(dnb_ah) < settings.cross_market_min_books:
+        return []
+
+    ah_consensus = statistics.median(dnb_ah)
+    gap_pp = abs(dnb_h2h - ah_consensus) * 100.0
+
+    multiplier, bucket_label = _time_bucket_info(match)
+    threshold_pp = settings.cross_market_pp_threshold * multiplier
+    if gap_pp < threshold_pp:
+        return []
+
+    return [AnomalyHit(
+        detector="cross_market",
+        severity=gap_pp,
+        description=(
+            f"Межрыночное расхождение DNB: 1X2 даёт {dnb_h2h*100:.1f}%, "
+            f"фора 0.0 — {ah_consensus*100:.1f}% ({gap_pp:.1f}пп, "
+            f"{len(dnb_ah)} контор) [корзина {bucket_label}, "
+            f"эфф. {threshold_pp:.1f}пп]"
+        ),
+        payload={
+            "dnb_h2h": dnb_h2h,
+            "dnb_ah0": ah_consensus,
+            "gap_pp": gap_pp,
+            "ah_books": len(dnb_ah),
+            "bucket_label": bucket_label,
+        },
+    )]
 
 
 def compute_score(hits: list[AnomalyHit]) -> float:
