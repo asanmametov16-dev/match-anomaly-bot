@@ -22,7 +22,7 @@ from .config import settings
 from .db import SessionLocal, SstatsModelOutcome, init_db
 from .prob_calibration import brier_score, log_loss
 from .results_client import FinishedMatch
-from .sstats_client import BASE_URL, _fetch_xg
+from .sstats_client import BASE_URL, _fetch_xg, _redact
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +104,8 @@ async def _fetch_ended_page(client: httpx.AsyncClient, offset: int,
         r.raise_for_status()
         return (r.json() or {}).get("data") or []
     except Exception as e:
-        log.warning("sstats /Games/list?Ended Offset=%s упал: %s", offset, e)
+        log.warning("sstats /Games/list?Ended Offset=%s упал: %s",
+                    offset, _redact(e))
         return []
 
 
@@ -230,7 +231,7 @@ async def fetch_finished_matches_sstats(
                 if reached_old:
                     break  # Order=-1 → глубже только ещё старее
     except Exception as e:
-        log.warning("sstats fetch_finished упал: %s", e)
+        log.warning("sstats fetch_finished упал: %s", _redact(e))
 
     log.info("sstats: второй источник результатов — %d матчей", len(out))
     return out

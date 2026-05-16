@@ -99,15 +99,42 @@ def _backed_outcome(detector: str, payload: dict) -> str | None:
     return None
 
 
-async def check_anomaly_results() -> None:
-    """Подтягивает результаты и отправляет итог в Telegram по каждому матчу."""
+def clear_false_sentinels() -> int:
+    """Удалить ResultNotification с result_found=False (ложные «сдались за
+    96ч»). Нужно для catch-up: широкое окно/второй источник могут теперь
+    закрыть матчи, по которым ранее не нашли результат. Если матч всё ещё
+    не резолвится — check_anomaly_results заново поставит sentinel через 96ч.
+    Возвращает число удалённых. Идемпотентно.
+    """
+    with SessionLocal() as session:
+        stale = session.execute(
+            select(ResultNotification).where(
+                ResultNotification.result_found == False)  # noqa: E712
+        ).scalars().all()
+        for rn in stale:
+            session.delete(rn)
+        session.commit()
+        return len(stale)
+
+
+async def check_anomaly_results(days_back: int = 3,
+                                sstats_max_pages: int = 8) -> None:
+    """Подтягивает результаты и отправляет итог в Telegram по каждому матчу.
+
+    days_back/sstats_max_pages по умолчанию узкие (ежечасный джоб); catch-up
+    вызывает с широким окном для ретро-резолва старого бэклога.
+    """
     # Два источника: football-data.org + sstats (покрывает лиги вне FD).
     # Локальный импорт рвёт цикл result_checker→sstats_history→
     # prob_calibration→result_checker.
     from .sstats_history import fetch_finished_matches_sstats
 
-    finished = list(await fetch_finished_matches(days_back=3))
-    finished += await fetch_finished_matches_sstats(days_back=3)
+    # football-data free отклоняет диапазон шире ~10 дней (400) — капаем;
+    # широкое окно catch-up обслуживает sstats.
+    fd_days = min(days_back, 10)
+    finished = list(await fetch_finished_matches(days_back=fd_days))
+    finished += await fetch_finished_matches_sstats(
+        days_back=days_back, max_pages=sstats_max_pages)
     if not finished:
         return
 

@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 
 import src.result_checker as rc
 import src.sstats_history as sh
-from src.db import Base, MatchResult
+from src.db import Base, MatchResult, ResultNotification
 from src.results_client import FinishedMatch
 
 
@@ -70,3 +70,20 @@ def test_distinct_matches_kept(db, monkeypatch):
     asyncio.run(rc.check_anomaly_results())
     with db() as s:
         assert s.scalar(select(func.count(MatchResult.result_key))) == 2
+
+
+def test_clear_false_sentinels_only(db):
+    with db() as s:
+        s.add_all([
+            ResultNotification(result_key="k_false", result_found=False),
+            ResultNotification(result_key="k_true", result_found=True),
+            ResultNotification(result_key="k_none", result_found=None),
+        ])
+        s.commit()
+
+    assert rc.clear_false_sentinels() == 1      # удалён только False
+    assert rc.clear_false_sentinels() == 0      # идемпотентно
+    with db() as s:
+        keys = set(s.execute(
+            select(ResultNotification.result_key)).scalars())
+    assert keys == {"k_true", "k_none"}

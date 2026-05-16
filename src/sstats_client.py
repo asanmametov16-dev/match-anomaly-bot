@@ -16,6 +16,7 @@ swallow'аются — на любой fail возвращаем None / пуст
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
@@ -24,6 +25,13 @@ import httpx
 
 from .config import settings
 from .results_client import normalize_team_name
+
+_APIKEY_RE = re.compile(r"apikey=[^&\s'\"]+")
+
+
+def _redact(msg: object) -> str:
+    """Вырезать apikey из строки (URL в исключениях httpx и т.п.)."""
+    return _APIKEY_RE.sub("apikey=***", str(msg))
 
 log = logging.getLogger(__name__)
 
@@ -94,7 +102,7 @@ async def _fetch_day_index(client: httpx.AsyncClient, date_str: str) -> dict[tup
         r.raise_for_status()
         games = (r.json() or {}).get("data") or []
     except Exception as e:
-        log.warning("sstats /Games/list?Date=%s упал: %s", date_str, e)
+        log.warning("sstats /Games/list?Date=%s упал: %s", date_str, _redact(e))
         return {}
 
     index: dict[tuple[str, str], int] = {}
@@ -131,7 +139,7 @@ async def _fetch_xg(client: httpx.AsyncClient, sstats_id: int) -> XgPrediction |
         r.raise_for_status()
         gl = ((r.json() or {}).get("data") or {}).get("glicko") or {}
     except Exception as e:
-        log.warning("sstats /Games/glicko/%s упал: %s", sstats_id, e)
+        log.warning("sstats /Games/glicko/%s упал: %s", sstats_id, _redact(e))
         _xg_cache[sstats_id] = (datetime.now(timezone.utc), None)
         return None
 
@@ -200,7 +208,7 @@ async def fetch_xg_batch(matches: Iterable) -> dict[str, XgPrediction]:
     except Exception as e:
         # Полная резервная защита — не должна срабатывать (вложенные блоки уже ловят),
         # но если что-то упадёт на уровне AsyncClient/сети — просто отдадим что собрали.
-        log.warning("sstats batch fetch упал: %s", e)
+        log.warning("sstats batch fetch упал: %s", _redact(e))
 
     log.info("sstats xG-обогащение: %d / %d матчей покрыты", len(out), len(matches_list))
     return out

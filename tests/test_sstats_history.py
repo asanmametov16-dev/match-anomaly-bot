@@ -59,6 +59,14 @@ def _glicko(hwp, awp, hxg=1.4, axg=1.0):
 
 # --- чистая логика -----------------------------------------------------------
 
+def test_redact_strips_apikey():
+    from src.sstats_client import _redact
+    msg = "Client error for url 'https://api.sstats.net/x?Limit=5&apikey=SECRET123'"
+    out = _redact(msg)
+    assert "SECRET123" not in out and "apikey=***" in out
+    assert "Limit=5" in out  # остальное не трогаем
+
+
 def test_actual():
     assert _actual(2, 0) == "home"
     assert _actual(0, 3) == "away"
