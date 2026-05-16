@@ -242,6 +242,15 @@ rate-limit ~133/мин, НЕ в пайплайне). Таблица `SstatsModel
 модель-vs-рынок (`/modelcal` ↔ `/calibration`) и лиго-зависимое доверие
 к `model_gap`. Brier/log-loss переиспользуются из `prob_calibration`.
 
+**Два источника результатов.** `result_checker` тянет сыгранные матчи и
+из football-data.org, и из sstats (`fetch_finished_matches_sstats` —
+только `/Games/list`, без glicko, Order=-1 со стопом по окну). sstats
+покрывает 200+ лиг вне football-data (MLS, Süper Lig, Eredivisie…),
+которые иначе никогда не резолвились → теперь по ним считаются
+CLV/Brier/outcomes. Оба источника пишут в общий `MatchResult`
+(dedupe по `result_key`); работает даже без `FOOTBALL_DATA_KEY`. Импорт
+в `result_checker` — локальный (рвёт цикл с `prob_calibration`).
+
 **Лиго-зависимое доверие (#3).** `refresh_model_trust` (ежечасно + на
 старте) классифицирует лиги по историческому Brier модели:
 `trusted` (Brier < 0.667 − `model_trust_uniform_margin`),
@@ -255,7 +264,7 @@ cold-start безопасен.
 
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 160 тестов, 0 сетевых
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 163 теста, 0 сетевых
 запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
 
 `conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но

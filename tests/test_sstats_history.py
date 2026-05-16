@@ -6,6 +6,7 @@ init_db застаблен (не трогаем реальный engine).
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -16,7 +17,9 @@ import src.sstats_client as sc
 import src.sstats_history as sh
 from src.db import Base, SstatsModelOutcome
 from src.prob_calibration import brier_score
+from src.results_client import FinishedMatch
 from src.sstats_history import (_actual, _parse_ended_item,
+                                fetch_finished_matches_sstats,
                                 sstats_model_summary)
 
 
@@ -206,3 +209,56 @@ def test_deep_respects_max_pages(reset, monkeypatch):
     assert written == 0
     with reset() as s:
         assert s.get(SstatsModelOutcome, 9) is None
+
+
+# --- второй источник результатов --------------------------------------------
+
+def test_finished_disabled_returns_empty(monkeypatch):
+    monkeypatch.setattr(sh.settings, "sstats_enabled", False)
+    monkeypatch.setattr(sh.settings, "sstats_api_key", "k")
+    assert asyncio.run(fetch_finished_matches_sstats()) == []
+
+
+def test_finished_parses_and_stops_on_old(reset, monkeypatch):
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    old = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+    def h(req):
+        if "/Games/list" in str(req.url):
+            return httpx.Response(200, json={"data": [
+                {"id": 11, "homeTeam": {"name": "Inter Miami"},
+                 "awayTeam": {"name": "LA Galaxy"},
+                 "homeFTResult": 3, "awayFTResult": 2, "date": recent,
+                 "season": {"league": {"name": "Major League Soccer",
+                                       "country": {"name": "USA"}}}},
+                {"id": 12, "homeTeam": {"name": "A"}, "awayTeam": {"name": "B"},
+                 "homeFTResult": 0, "awayFTResult": 0, "date": recent,
+                 "season": {"league": {"name": "L"}}},
+                {"id": 13, "homeTeam": {"name": "Old"},
+                 "awayTeam": {"name": "Match"}, "homeFTResult": 1,
+                 "awayFTResult": 0, "date": old,
+                 "season": {"league": {"name": "L"}}},
+            ]})
+        return httpx.Response(404, json={})
+
+    _install(monkeypatch, h)
+    res = asyncio.run(fetch_finished_matches_sstats(days_back=3))
+    assert len(res) == 2  # старый (30д) отброшен
+    assert all(isinstance(m, FinishedMatch) for m in res)
+    m = res[0]
+    assert m.home_team == "Inter Miami" and m.home_score == 3
+    assert m.competition == "USA — Major League Soccer"
+
+
+def test_finished_skips_items_without_date(reset, monkeypatch):
+    def h(req):
+        if "/Games/list" in str(req.url):
+            return httpx.Response(200, json={"data": [
+                {"id": 21, "homeTeam": {"name": "X"}, "awayTeam": {"name": "Y"},
+                 "homeFTResult": 1, "awayFTResult": 1},  # без date
+            ]})
+        return httpx.Response(200, json={"data": []})
+
+    _install(monkeypatch, h)
+    assert asyncio.run(fetch_finished_matches_sstats()) == []

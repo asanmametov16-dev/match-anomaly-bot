@@ -101,7 +101,13 @@ def _backed_outcome(detector: str, payload: dict) -> str | None:
 
 async def check_anomaly_results() -> None:
     """Подтягивает результаты и отправляет итог в Telegram по каждому матчу."""
-    finished = await fetch_finished_matches(days_back=3)
+    # Два источника: football-data.org + sstats (покрывает лиги вне FD).
+    # Локальный импорт рвёт цикл result_checker→sstats_history→
+    # prob_calibration→result_checker.
+    from .sstats_history import fetch_finished_matches_sstats
+
+    finished = list(await fetch_finished_matches(days_back=3))
+    finished += await fetch_finished_matches_sstats(days_back=3)
     if not finished:
         return
 

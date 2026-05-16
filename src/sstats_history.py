@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from .config import settings
 from .db import SessionLocal, SstatsModelOutcome, init_db
 from .prob_calibration import brier_score, log_loss
+from .results_client import FinishedMatch
 from .sstats_client import BASE_URL, _fetch_xg
 
 log = logging.getLogger(__name__)
@@ -185,6 +186,54 @@ async def backfill(max_games: int = 1500, page_limit: int = 200,
 
     log.info("sstats backfill: записано %d матчей", written)
     return written
+
+
+async def fetch_finished_matches_sstats(
+    days_back: int = 3, max_pages: int = 8
+) -> list[FinishedMatch]:
+    """Свежие сыгранные матчи из sstats как ВТОРОЙ источник результатов.
+
+    Покрывает лиги вне football-data.org (MLS, Süper Lig, Eredivisie и т.д.),
+    которые иначе никогда не резолвятся → нет CLV/Brier/outcomes. Только
+    /Games/list (без per-game glicko) — дёшево. Order=-1 (свежие первыми):
+    как только встретили матч старше окна — дальше только старее, стоп.
+    Никогда не кидает исключений (как остальной sstats-код).
+    """
+    if not (settings.sstats_api_key and settings.sstats_enabled):
+        return []
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)) \
+        .replace(tzinfo=None)
+    out: list[FinishedMatch] = []
+
+    try:
+        async with httpx.AsyncClient() as client:
+            offset = 0
+            for _ in range(max_pages):
+                page = await _fetch_ended_page(client, offset, 200)
+                if not page:
+                    break
+                offset += 200
+                reached_old = False
+                for item in page:
+                    p = _parse_ended_item(item)
+                    if p is None or p["played"] is None:
+                        continue  # без даты не построить result_key — пропуск
+                    if p["played"] < cutoff:
+                        reached_old = True
+                        continue
+                    out.append(FinishedMatch(
+                        home_team=p["home"], away_team=p["away"],
+                        home_score=p["hs"], away_score=p["as"],
+                        utc_date=p["played"], competition=p["league"] or "",
+                    ))
+                if reached_old:
+                    break  # Order=-1 → глубже только ещё старее
+    except Exception as e:
+        log.warning("sstats fetch_finished упал: %s", e)
+
+    log.info("sstats: второй источник результатов — %d матчей", len(out))
+    return out
 
 
 # --- Лиго-зависимое доверие модели (#3) -------------------------------------
