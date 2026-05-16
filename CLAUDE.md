@@ -28,8 +28,9 @@ src/
 ├── sstats_client.py   # клиент sstats.net: xG/winProb/Glicko для model_gap
 ├── detectors.py       # 6 детекторов: spread, drift, synchronized, model_gap, exotic_spread, sharp_move
 ├── clv.py             # closing line value: оценка сигнальной ценности алертов
+├── calibration.py     # CLV → множители весов детекторов (compute_score)
 ├── notifier.py        # отправка алертов в Telegram (использует общий Bot)
-├── bot.py             # команды бота: /stats /accuracy /clv /recent /thresholds /elo
+├── bot.py             # команды: /stats /accuracy /clv /weights /recent /thresholds /elo
 └── pipeline.py        # один цикл: fetch → xG-обогащение → детект → save → alert
 ```
 
@@ -162,9 +163,20 @@ sentinel-строку с NULL — `compute_pending_clv` (ежечасный дж
 `/clv`. Положительный CLV необходим, но не достаточен для прибыльности —
 нужно ещё перекрыть маржу букмекера.
 
+### Калибровка весов по CLV
+
+`calibration.py` замыкает петлю: `compute_score` больше не суммирует чисто
+ручные `DETECTOR_WEIGHTS`, а домножает их на CLV-множитель. Раз в час
+`refresh_detector_weights` берёт средний CLV по детектору из `AnomalyCLV` и
+считает `clamp(1 + sensitivity·mean_clv_pp, min, max)`. Детектор с числом
+измерений < `clv_calibration_min_samples` (30) не калибруется (множитель 1.0,
+доверяем дефолту). Множители — горячий модуль-кэш (без БД в пути детекторов),
+прогреваются на старте и видны командой `/weights`. Отключается флагом
+`clv_calibration_enabled=false`.
+
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 93 теста, 0 сетевых
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 103 теста, 0 сетевых
 запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
 
 `conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но
@@ -182,6 +194,7 @@ tests/
 ├── test_probability_weights.py      # веса букмекеров, weighted median
 ├── test_sstats_client.py            # sstats клиент (mock transport)
 ├── test_clv.py                      # closing line value
+├── test_calibration.py              # CLV → веса детекторов
 ├── test_elo_bootstrap.py            # загрузка рейтингов с clubelo.com
 └── test_elo_draw_share.py           # динамическая доля ничьих
 ```

@@ -19,9 +19,11 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, CommandHandler, ContextTypes,
                           filters)
 
+from .calibration import current_calibration
 from .config import settings
 from .db import (Anomaly, AnomalyCLV, AnomalyOutcome, OddsSnapshot,
                  ResultNotification, SessionLocal, TeamRating)
+from .detectors import DETECTOR_WEIGHTS
 from .elo import _normalize as normalize_team
 
 log = logging.getLogger(__name__)
@@ -43,6 +45,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/stats — общая статистика\n"
         "/accuracy — точность детекторов\n"
         "/clv — closing line value по детекторам\n"
+        "/weights — веса детекторов (калибровка по CLV)\n"
         "/recent [N] — последние N аномалий\n"
         "/thresholds — текущие пороги\n"
         "/elo <команда> — Elo-рейтинг\n"
@@ -246,6 +249,45 @@ async def cmd_clv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+async def cmd_weights(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Текущие веса детекторов: базовый × CLV-множитель = эффективный."""
+    if not _is_authorized(update):
+        return
+
+    calib = current_calibration()
+    min_n = settings.clv_calibration_min_samples
+    enabled = settings.clv_calibration_enabled
+
+    lines = ["⚖️ <b>Веса детекторов</b>", ""]
+    if not enabled:
+        lines.append("<i>CLV-калибровка выключена — веса базовые.</i>")
+        lines.append("")
+    lines.append("<i>base × CLV-множитель = эффективный вес</i>")
+    lines.append("")
+
+    for det in sorted(DETECTOR_WEIGHTS, key=lambda d: -DETECTOR_WEIGHTS[d]):
+        base = DETECTOR_WEIGHTS[det]
+        n, mean_clv, mult = calib.get(det, (0, 0.0, 1.0))
+        eff = base * mult
+        if not enabled or n < min_n:
+            tail = f"<i>(n={n}&lt;{min_n}, не калибруется)</i>"
+        else:
+            tail = f"n={n} ср.CLV={mean_clv:+.2f}пп ×{mult:.2f}"
+        lines.append(
+            f"<b>{escape(det)}</b>: {base:.1f} → <b>{eff:.2f}</b>  {tail}"
+        )
+
+    lines += [
+        "",
+        f"<i>Множитель = clamp(1 + {settings.clv_calibration_sensitivity:g}×ср.CLV, "
+        f"{settings.clv_calibration_min_multiplier:g}, "
+        f"{settings.clv_calibration_max_multiplier:g}). "
+        f"Пересчёт ежечасно из истории CLV.</i>",
+    ]
+
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
 async def cmd_recent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
@@ -324,6 +366,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("accuracy", cmd_accuracy))
     app.add_handler(CommandHandler("clv", cmd_clv))
+    app.add_handler(CommandHandler("weights", cmd_weights))
     app.add_handler(CommandHandler("recent", cmd_recent))
     app.add_handler(CommandHandler("thresholds", cmd_thresholds))
     app.add_handler(CommandHandler("elo", cmd_elo))

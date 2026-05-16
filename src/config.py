@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     sharp_weight: float = 1.0    # вес sharp-конторы в consensus_probabilities
     default_weight: float = 0.4  # вес остальных контор
 
+    # Калибровка весов детекторов по накопленному CLV (см. calibration.py)
+    clv_calibration_enabled: bool = True
+    clv_calibration_min_samples: int = 30      # меньше — вес детектора дефолтный
+    clv_calibration_sensitivity: float = 0.15  # прибавка к множителю на 1пп ср. CLV
+    clv_calibration_min_multiplier: float = 0.3
+    clv_calibration_max_multiplier: float = 1.6
+
     # Временны́е корзины: порог × multiplier — чем ближе к матчу, тем чувствительнее
     # 0-6ч: ×0.70 (ловим больше), 6-24ч: ×0.85, 24-72ч: ×1.0 (база), 72ч+: ×1.3
     time_buckets_hours: list[int] = [6, 24, 72]

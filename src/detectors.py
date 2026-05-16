@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Iterable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .calibration import detector_multiplier
 from .config import settings
 from .db import OddsSnapshot
 from .elo import fair_odds_1x2, get_rating
@@ -483,5 +484,13 @@ def detect_exotic_spread(match: MatchOdds) -> list[AnomalyHit]:
 
 
 def compute_score(hits: list[AnomalyHit]) -> float:
-    """Взвешенный счёт подозрительности по сработавшим детекторам."""
-    return sum(DETECTOR_WEIGHTS.get(h.detector, 1.0) for h in hits)
+    """Взвешенный счёт подозрительности по сработавшим детекторам.
+
+    Базовый вес (DETECTOR_WEIGHTS) масштабируется CLV-множителем: детектор,
+    чьи срабатывания исторически не подтверждались движением рынка, весит
+    меньше. См. calibration.py.
+    """
+    return sum(
+        DETECTOR_WEIGHTS.get(h.detector, 1.0) * detector_multiplier(h.detector)
+        for h in hits
+    )

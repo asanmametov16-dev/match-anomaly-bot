@@ -20,6 +20,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from telegram.error import NetworkError
 
 from .bot import build_application
+from .calibration import refresh_detector_weights
 from .clv import compute_pending_clv
 from .config import settings
 from .db import init_db
@@ -70,6 +71,10 @@ async def main() -> None:
     init_db()
     log.info("БД инициализирована: %s", settings.db_url)
 
+    # Прогреваем CLV-калибровку весов из накопленной истории до первого цикла,
+    # чтобы compute_score сразу использовал откалиброванные веса.
+    refresh_detector_weights()
+
     # Telegram-приложение
     app = build_application()
     set_bot(app.bot)
@@ -103,6 +108,13 @@ async def main() -> None:
         max_instances=1,
         coalesce=True,
         id="clv_compute",
+    )
+    scheduler.add_job(
+        refresh_detector_weights,
+        IntervalTrigger(hours=1),
+        max_instances=1,
+        coalesce=True,
+        id="weight_calibration",
     )
 
     # Запуск всего: app.initialize / start, потом polling, потом scheduler.
