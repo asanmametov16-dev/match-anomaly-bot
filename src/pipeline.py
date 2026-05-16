@@ -8,8 +8,8 @@ from sqlalchemy import func, select
 
 from .config import settings
 from .db import Anomaly, OddsSnapshot, SessionLocal
-from .detectors import (ALERT_DETECTORS, AnomalyHit, compute_score,
-                        detect_cross_market, detect_drift,
+from .detectors import (ALERT_DETECTORS, AnomalyHit, classify_signal,
+                        compute_score, detect_cross_market, detect_drift,
                         detect_exotic_spread, detect_model_gap,
                         detect_sharp_move, detect_spread, detect_synchronized,
                         _median)
@@ -127,15 +127,24 @@ async def run_once() -> None:
                 if not _was_recently_alerted(session, match.match_id, h.detector)
             ]
 
+            # exotic_spread / cross_market сохраняются в БД, но в алерт не идут
+            alert_hits = [h for h in fresh_hits if h.detector in ALERT_DETECTORS]
+
+            # Precision-gate: классифицируем кластер и метим КАЖДУЮ запись
+            # confidence (signal/weak). Слабые сохраняются, но не эскалируются.
+            label, _meta = classify_signal(alert_hits)
             for hit in fresh_hits:
+                hit.payload = {**(hit.payload or {}), "signal_confidence": label}
                 _save_anomaly(session, match, hit)
 
             _save_snapshot(session, match, medians)
 
-            # exotic_spread сохраняется в БД, но в алерт не идёт
-            alert_hits = [h for h in fresh_hits if h.detector in ALERT_DETECTORS]
+            if settings.signal_gate_enabled:
+                do_alert = label == "signal"
+            else:
+                do_alert = len(alert_hits) >= settings.alert_min_detectors
 
-            if len(alert_hits) >= settings.alert_min_detectors:
+            if do_alert and alert_hits:
                 score = compute_score(alert_hits)
                 await send_alert(match, alert_hits, score)
 

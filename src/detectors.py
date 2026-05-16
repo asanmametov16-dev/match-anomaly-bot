@@ -586,3 +586,55 @@ def compute_score(hits: list[AnomalyHit]) -> float:
         DETECTOR_WEIGHTS.get(h.detector, 1.0) * detector_multiplier(h.detector)
         for h in hits
     )
+
+
+def classify_signal(hits: list[AnomalyHit]) -> tuple[str, dict]:
+    """Precision-gate: «точный сигнал» против «слабого наблюдения».
+
+    Точный сигнал = несколько разных детекторов + высокий CLV-взвешенный
+    счёт + детекторы исторически CLV-подтверждены (множитель ≥ порога) +
+    однонаправленный консенсус. Слабые кластеры всё равно сохраняются
+    (помечаются confidence=weak), но не эскалируются в Telegram.
+
+    Это НЕ ставочная рекомендация — лишь оценка качества рыночного сигнала.
+    Возвращает (label ∈ {"signal","weak"}, meta).
+    """
+    from collections import Counter
+
+    from .clv import extract_bet_side
+
+    distinct = sorted({h.detector for h in hits})
+    n = len(distinct)
+    score = compute_score(hits)
+    mults = [detector_multiplier(d) for d in distinct] or [1.0]
+    mean_mult = sum(mults) / len(mults)
+
+    sides = [s for h in hits
+             if (s := extract_bet_side(h.detector, h.payload or {}))]
+    agreement, agreed_side = 0.0, None
+    if sides:
+        agreed_side, top = Counter(sides).most_common(1)[0]
+        agreement = top / len(sides)
+
+    meta = {
+        "n_detectors": n,
+        "score": round(score, 2),
+        "mean_clv_mult": round(mean_mult, 2),
+        "agreement": round(agreement, 2),
+        "side": agreed_side,
+    }
+
+    if not settings.signal_gate_enabled:
+        meta["confidence"] = "signal"
+        return "signal", meta
+
+    is_signal = (
+        n >= settings.signal_min_detectors
+        and score >= settings.signal_score_threshold
+        and mean_mult >= settings.signal_min_clv_multiplier
+        and bool(sides)  # нужен actionable направленный консенсус
+        and agreement >= settings.signal_min_agreement
+    )
+    label = "signal" if is_signal else "weak"
+    meta["confidence"] = label
+    return label, meta

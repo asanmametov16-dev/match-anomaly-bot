@@ -267,21 +267,27 @@ def _model_gap_explanation(group: list[AnomalyHit]) -> str:
     )
 
 
+_SIGNAL_DISCLAIMER = (
+    "ℹ️ <i>Аналитический сигнал рыночной аномалии — не ставочная и не "
+    "инвестиционная рекомендация. Решение и риск остаются за вами.</i>"
+)
+
+
 def _format_message(match: MatchOdds, hits: list[AnomalyHit], score: float) -> str:
     if score >= 5:
-        level_icon, level_text = "🚨", "Высокое подозрение"
+        level_icon, level_text = "🎯", "высокая уверенность"
     elif score >= 3:
-        level_icon, level_text = "⚠️", "Среднее подозрение"
+        level_icon, level_text = "📈", "средняя уверенность"
     else:
-        level_icon, level_text = "💡", "Низкое подозрение"
+        level_icon, level_text = "💡", "низкая уверенность"
 
     lines = [
-        f"{level_icon} <b>Подозрительный матч</b>  [{level_text}]",
+        f"{level_icon} <b>Рыночный сигнал</b>  [{level_text}]",
         f"<b>{escape(match.home_team)}</b> — <b>{escape(match.away_team)}</b>",
         f"🕐 {(match.commence_time.replace(tzinfo=timezone.utc) + timedelta(hours=3)).strftime('%d.%m.%Y %H:%M')} МСК",
         f"🏆 {escape(match.sport_key)}",
         "",
-        f"Счёт подозрительности: <b>{score:.1f}</b>  |  Детекторов: {len(hits)}",
+        f"Сила сигнала: <b>{score:.1f}</b>  |  Детекторов: {len(hits)}",
         "",
     ]
 
@@ -311,6 +317,7 @@ def _format_message(match: MatchOdds, hits: list[AnomalyHit], score: float) -> s
     if prob_block:
         lines += ["", "<b>Вероятные исходы событий:</b>", prob_block]
 
+    lines += ["", _SIGNAL_DISCLAIMER]
     return "\n".join(lines)
 
 

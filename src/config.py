@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     alert_min_detectors: int = 2       # минимум детекторов (без exotic_spread) для алерта
     min_bookmakers_per_match: int = 6  # матчи с меньшим числом контор пропускаем целиком
 
+    # Precision-gate: что считается «точным сигналом» (см. classify_signal).
+    # Слабые кластеры по-прежнему сохраняются, но помечаются low-confidence
+    # и НЕ уходят в Telegram. signal_gate_enabled=false → старое поведение.
+    signal_gate_enabled: bool = True
+    signal_min_detectors: int = 2          # разных alert-детекторов в кластере
+    signal_score_threshold: float = 4.0    # CLV-взвешенный compute_score
+    signal_min_clv_multiplier: float = 1.0  # ср. CLV-множитель сработавших
+    signal_min_agreement: float = 0.55     # доля лидирующего исхода (направление)
+
     # Elo
     elo_k_factor: float = 20.0
     elo_home_advantage: float = 60.0
