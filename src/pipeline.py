@@ -14,6 +14,7 @@ from .detectors import (ALERT_DETECTORS, AnomalyHit, compute_score,
                         _median)
 from .notifier import send_alert
 from .odds_client import MatchOdds, fetch_odds
+from .sstats_client import fetch_xg_batch
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +75,10 @@ async def run_once() -> None:
         log.exception("Не удалось забрать данные с The Odds API: %s", e)
         return
 
+    # Обогащение xG/winProb из sstats.net — батч-вызов до основного цикла.
+    # При любой ошибке возвращается пустой dict, model_gap уходит на Elo fallback.
+    xg_predictions = await fetch_xg_batch(matches)
+
     with SessionLocal() as session:
         for match in matches:
             now = datetime.now(match.commence_time.tzinfo)
@@ -108,7 +113,8 @@ async def run_once() -> None:
             hits += detect_spread(match)
             hits += detect_drift(session, match)
             hits += detect_synchronized(session, match)
-            hits += detect_model_gap(session, match, medians)
+            hits += detect_model_gap(session, match, medians,
+                                     xg_pred=xg_predictions.get(match.match_id))
             hits += detect_sharp_move(match)
             hits += detect_exotic_spread(match)
 
