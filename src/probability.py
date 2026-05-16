@@ -5,6 +5,7 @@ fair comparison across bookmakers with different overround levels.
 """
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from .config import settings
@@ -20,12 +21,67 @@ def implied_probability(odds: float) -> float:
     return 1.0 / odds
 
 
+def _devig_proportional(probs: dict[str, float], total: float) -> dict[str, float]:
+    """Простое пропорциональное снятие маржи: делим на сумму.
+
+    Систематически смещено: маржа на самом деле концентрируется на
+    аутсайдерах (favourite-longshot bias), а здесь снимается одинаковой
+    долей со всех исходов — фавориты занижаются, аутсайдеры/ничьи
+    завышаются. Оставлено как метод для отката (settings.devig_method).
+    """
+    return {k: v / total for k, v in probs.items()}
+
+
+def _devig_shin(probs: dict[str, float], total: float) -> dict[str, float]:
+    """Метод Шина: маржа моделируется как защита букмекера от инсайдеров.
+
+    Доля «инсайдерских» денег z ∈ [0,1) подбирается так, чтобы истинные
+    вероятности
+        q_i = (sqrt(z² + 4(1−z)·p_i²/B) − z) / (2(1−z))
+    суммировались в 1 (B = сумма implied prob = overround). Σq_i строго
+    убывает по z, поэтому z находится бисекцией. Шин лучше пропорционального
+    воспроизводит favourite-longshot bias — стандарт для футбольного 1X2.
+
+    Вырожденные входы (нет маржи B≤1, неположительные prob) → откат на
+    пропорциональный метод.
+    """
+    p = list(probs.values())
+    if total <= 1.0 or any(v <= 0.0 for v in p):
+        return _devig_proportional(probs, total)
+
+    def q(z: float) -> list[float]:
+        return [
+            (math.sqrt(z * z + 4.0 * (1.0 - z) * v * v / total) - z)
+            / (2.0 * (1.0 - z))
+            for v in p
+        ]
+
+    lo, hi = 0.0, 0.999  # Σq(0)=sqrt(B)>1, Σq убывает с ростом z
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if sum(q(mid)) > 1.0:
+            lo = mid
+        else:
+            hi = mid
+
+    qs = q((lo + hi) / 2.0)
+    norm = sum(qs)  # снимаем крошечный остаток бисекции
+    return {k: v / norm for k, v in zip(probs.keys(), qs)}
+
+
 def remove_overround(probs: dict[str, float]) -> dict[str, float]:
-    """Normalize probabilities so they sum to 1.0, removing bookmaker margin."""
+    """Снять маржу букмекера: вероятности нормируются в сумму 1.0.
+
+    Метод выбирается settings.devig_method ∈ {"shin", "proportional"}.
+    По умолчанию Shin — точнее для 1X2. Откат на "proportional" не требует
+    пересчёта данных, только перезапуска.
+    """
     total = sum(probs.values())
     if total <= 0:
         raise ValueError("sum of probabilities must be positive")
-    return {k: v / total for k, v in probs.items()}
+    if settings.devig_method == "proportional":
+        return _devig_proportional(probs, total)
+    return _devig_shin(probs, total)
 
 
 def probabilities_from_match(bookmaker_odds: "BookmakerOdds") -> dict[str, float] | None:

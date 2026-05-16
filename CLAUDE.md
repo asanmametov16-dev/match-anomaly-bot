@@ -104,13 +104,18 @@ python -m src.main
 probabilities), а не сырыми коэффициентами. Это позволяет честно сравнивать
 котировки разных букмекеров с разным overround.
 
-```
-implied_prob = 1 / odds              # сырая вероятность
-margin_free  = prob / sum(all_probs) # нормализация (remove_overround)
-```
+Снятие маржи (`remove_overround`) по умолчанию — **метод Шина**, а не
+пропорциональное деление. Пропорциональный метод смещён: маржа
+концентрируется на аутсайдерах (favourite-longshot bias), а деление на
+сумму снимает её одинаковой долей со всех исходов → фаворит занижается,
+аутсайдер и ничья завышаются. Шин подбирает долю «инсайдерских» денег z
+бисекцией так, чтобы `q_i = (√(z²+4(1−z)p_i²/B) − z)/(2(1−z))`
+суммировались в 1 — это точнее воспроизводит реальную структуру маржи в
+1X2. Переключается `devig_method` ∈ {`shin`, `proportional`}; откат не
+требует пересчёта данных.
 
-Реализация в `src/probability.py`: `implied_probability`, `remove_overround`,
-`probabilities_from_match`.
+Реализация в `src/probability.py`: `implied_probability`, `remove_overround`
+(`_devig_shin` / `_devig_proportional`), `probabilities_from_match`.
 
 ### Веса букмекеров
 
@@ -176,7 +181,7 @@ sentinel-строку с NULL — `compute_pending_clv` (ежечасный дж
 
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 103 теста, 0 сетевых
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 112 тестов, 0 сетевых
 запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
 
 `conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но
@@ -186,6 +191,7 @@ sentinel-строку с NULL — `compute_pending_clv` (ежечасный дж
 ```
 tests/
 ├── test_probability.py              # implied_prob, remove_overround, consensus
+├── test_probability_devig.py        # метод Шина vs пропорциональный
 ├── test_detectors_spread.py         # detect_spread в процентных пунктах
 ├── test_detectors_drift.py          # скользящее окно дрейфа
 ├── test_detectors_synchronized.py   # sharp-фильтр для synchronized
