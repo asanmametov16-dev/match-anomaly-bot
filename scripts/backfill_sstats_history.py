@@ -34,6 +34,8 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # httpx логирует полный URL с ?apikey=... — не светим ключ в выводе/логах
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     written = asyncio.run(backfill(
         max_games=args.max_games,

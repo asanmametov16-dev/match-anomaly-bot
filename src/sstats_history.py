@@ -37,29 +37,36 @@ def _first(d: dict, *keys):
 
 
 def _parse_ended_item(g: dict) -> dict | None:
-    """Достаёт id/лигу/дату/команды/счёт из элемента /Games/list?Ended."""
+    """Достаёт id/лигу/дату/команды/счёт из элемента /Games/list?Ended.
+
+    Реальная схема sstats: счёт — homeFTResult/awayFTResult (фолбэк на
+    homeResult/awayResult), лига — season.league.name (+ страна), дата —
+    date (ISO). Остальные кандидаты оставлены как страховка.
+    """
     gid = g.get("id")
     home = ((g.get("homeTeam") or {}).get("name") or "").strip()
     away = ((g.get("awayTeam") or {}).get("name") or "").strip()
-    hs = _first(g, "homeScore", "scoreHome", "ftHome")
+
+    hs = _first(g, "homeFTResult", "homeResult", "homeScore", "scoreHome")
     if hs is None:
         hs = _first((g.get("score") or {}), "home", "fullTimeHome")
-    if hs is None:
-        hs = (g.get("homeTeam") or {}).get("score")
-    as_ = _first(g, "awayScore", "scoreAway", "ftAway")
+    as_ = _first(g, "awayFTResult", "awayResult", "awayScore", "scoreAway")
     if as_ is None:
         as_ = _first((g.get("score") or {}), "away", "fullTimeAway")
-    if as_ is None:
-        as_ = (g.get("awayTeam") or {}).get("score")
 
     if not (gid and home and away) or hs is None or as_ is None:
         return None
 
-    league = _first(g, "leagueName") or (g.get("league") or {}).get("name") \
-        or (g.get("competition") or {}).get("name")
+    season_league = ((g.get("season") or {}).get("league") or {})
+    league = season_league.get("name") \
+        or _first(g, "leagueName") \
+        or (g.get("league") or {}).get("name")
+    country = (season_league.get("country") or {}).get("name")
+    if league and country:
+        league = f"{country} — {league}"
 
     played = None
-    raw_dt = _first(g, "date", "startDate", "startTime", "utcDate")
+    raw_dt = _first(g, "date", "dateUtc", "startDate", "utcDate")
     if isinstance(raw_dt, str):
         try:
             played = datetime.fromisoformat(raw_dt.replace("Z", "+00:00")) \
