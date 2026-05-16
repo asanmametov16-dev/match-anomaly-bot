@@ -108,9 +108,16 @@ async def _fetch_ended_page(client: httpx.AsyncClient, offset: int,
 
 
 async def backfill(max_games: int = 1500, page_limit: int = 200,
-                   sleep: float = _RATE_SLEEP) -> int:
+                   sleep: float = _RATE_SLEEP, start_offset: int = 0,
+                   max_pages: int | None = None,
+                   stop_on_known_page: bool = True) -> int:
     """Подтянуть до max_games исторических матчей с winProb. Идемпотентно
     (game_id — PK, уже записанные пропускаются). Возвращает число новых.
+
+    Глубокая выборка: при stop_on_known_page=False цикл НЕ останавливается на
+    полностью известной странице (нужно, т.к. Offset=0 = свежие = уже в БД),
+    а идёт дальше по offset до пустой страницы / max_pages / max_games. С
+    start_offset можно продолжить с известной глубины.
     """
     if not (settings.sstats_api_key and settings.sstats_enabled):
         log.error("SSTATS_API_KEY не задан / sstats выключен — бэкфилл невозможен")
@@ -118,14 +125,18 @@ async def backfill(max_games: int = 1500, page_limit: int = 200,
 
     init_db()
     written = 0
-    offset = 0
+    offset = start_offset
+    pages = 0
 
     async with httpx.AsyncClient() as client:
         while written < max_games:
+            if max_pages is not None and pages >= max_pages:
+                break
             page = await _fetch_ended_page(client, offset, page_limit)
             if not page:
-                break
+                break  # данные кончились — настоящий конец истории
             offset += page_limit
+            pages += 1
             page_new = 0
 
             with SessionLocal() as session:
@@ -168,8 +179,8 @@ async def backfill(max_games: int = 1500, page_limit: int = 200,
                     page_new += 1
                 session.commit()
 
-            if page_new == 0:
-                # страница без новых записей → пагинация исчерпана/не движется
+            if page_new == 0 and stop_on_known_page:
+                # мелкий режим: первая же известная страница = конец свежих
                 break
 
     log.info("sstats backfill: записано %d матчей", written)

@@ -28,7 +28,17 @@ def main() -> None:
                     help="размер страницы /Games/list (по умолчанию 200)")
     ap.add_argument("--sleep", type=float, default=0.45,
                     help="пауза между glicko-запросами, сек (rate-limit)")
+    ap.add_argument("--start-offset", type=int, default=0,
+                    help="с какого offset /Games/list начинать (глубина)")
+    ap.add_argument("--max-pages", type=int, default=None,
+                    help="ограничение числа страниц (safety для --deep)")
+    ap.add_argument("--deep", action="store_true",
+                    help="глубокая выборка: не стопать на известных страницах "
+                         "(идём по offset вглубь; нужен --max-pages)")
     args = ap.parse_args()
+
+    if args.deep and args.max_pages is None:
+        ap.error("--deep требует --max-pages (защита от бесконечного цикла)")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -41,6 +51,9 @@ def main() -> None:
         max_games=args.max_games,
         page_limit=args.page_limit,
         sleep=args.sleep,
+        start_offset=args.start_offset,
+        max_pages=args.max_pages,
+        stop_on_known_page=not args.deep,
     ))
     print(f"\nЗаписано новых матчей: {written}")
 

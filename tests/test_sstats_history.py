@@ -140,3 +140,69 @@ def test_summary_aggregates(reset, monkeypatch):
 
 def test_summary_empty():
     assert sstats_model_summary() == {"n": 0}
+
+
+# --- глубокая выборка (--deep) ----------------------------------------------
+
+def _paged_handler():
+    """Offset=0 → известная страница (id 1,2), Offset=50 → новый id 9,
+    дальше пусто. Имитирует «свежее уже в БД, глубже — новое»."""
+    def h(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if "/Games/list" in url:
+            if "Offset=0" in url:
+                return httpx.Response(200, json={"data": _PAGE[:2]})
+            if "Offset=50" in url:
+                return httpx.Response(200, json={"data": [
+                    {"id": 9, "homeTeam": {"name": "G"},
+                     "awayTeam": {"name": "H"}, "homeScore": 3,
+                     "awayScore": 0, "league": {"name": "EPL"}}]})
+            return httpx.Response(200, json={"data": []})
+        if "/Games/glicko/" in url:
+            return httpx.Response(200, json=_glicko(0.5, 0.3))
+        return httpx.Response(404, json={})
+    return h
+
+
+def _seed_known(Session, *ids):
+    """Прямо кладём «уже известные» матчи в БД (Offset=0 их вернёт)."""
+    with Session() as s:
+        for i in ids:
+            s.add(SstatsModelOutcome(
+                game_id=i, league="EPL", home_team="x", away_team="y",
+                p_home=0.4, p_draw=0.3, p_away=0.3, actual="home",
+                brier=0.5, log_loss=1.0))
+        s.commit()
+
+
+def test_shallow_stops_on_known_page(reset, monkeypatch):
+    _install(monkeypatch, _paged_handler())
+    _seed_known(reset, 1, 2)  # Offset=0 (id1,2) полностью известна
+    # мелкий режим: первая известная страница → break, глубже не идёт
+    assert asyncio.run(sh.backfill(max_games=99, page_limit=50, sleep=0)) == 0
+    with reset() as s:
+        assert s.get(SstatsModelOutcome, 9) is None
+
+
+def test_deep_continues_past_known_page(reset, monkeypatch):
+    _install(monkeypatch, _paged_handler())
+    _seed_known(reset, 1, 2)
+    # deep: Offset=0 известна (0 новых) — НЕ стоп, идёт на Offset=50 → id9
+    written = asyncio.run(sh.backfill(
+        max_games=99, page_limit=50, sleep=0,
+        stop_on_known_page=False, max_pages=10))
+    assert written == 1
+    with reset() as s:
+        assert s.get(SstatsModelOutcome, 9) is not None
+
+
+def test_deep_respects_max_pages(reset, monkeypatch):
+    _install(monkeypatch, _paged_handler())
+    _seed_known(reset, 1, 2)
+    # max_pages=1 → только Offset=0 (всё известно), до Offset=50 не доходит
+    written = asyncio.run(sh.backfill(
+        max_games=99, page_limit=50, sleep=0,
+        stop_on_known_page=False, max_pages=1))
+    assert written == 0
+    with reset() as s:
+        assert s.get(SstatsModelOutcome, 9) is None
