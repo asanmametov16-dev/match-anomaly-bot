@@ -22,8 +22,10 @@ __pycache__/
 # Данные и логи (генерируются на лету)
 data/*.sqlite
 data/*.db
+data/*.json
 logs/*.log
 logs/*.log.*
+.restart_time
 
 # IDE
 .vscode/

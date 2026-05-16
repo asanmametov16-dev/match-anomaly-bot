@@ -88,13 +88,13 @@ def test_spread_consistent_at_low_probability():
     very differently from a 8%-relative spread at 50% probability.
     The new pp-based detector fires equally for the same absolute gap.
     """
-    # bk1: away=10.0 → clean_away ≈ 9.8%
-    # bk2: away=6.50 → clean_away ≈ 14.4%
+    # bk1: away=11.0 → clean_away ≈ 9.0%
+    # bk2: away=6.00 → clean_away ≈ 15.4%
     # bk3: away=8.00 → clean_away ≈ 12.0%
-    # Spread ≈ 4.6pp → should trigger
+    # Spread ≈ 6.4pp → comfortably above the configured pp threshold
     match = _match([
-        _bm("bk1", home=1.50, draw=4.00, away=10.0),
-        _bm("bk2", home=1.50, draw=4.00, away=6.50),
+        _bm("bk1", home=1.50, draw=4.00, away=11.0),
+        _bm("bk2", home=1.50, draw=4.00, away=6.00),
         _bm("bk3", home=1.50, draw=4.00, away=8.00),
     ])
     hits = detect_spread(match)

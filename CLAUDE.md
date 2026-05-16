@@ -25,10 +25,12 @@ src/
 ├── elo_bootstrap.py   # разовая загрузка рейтингов с clubelo.com
 ├── elo_updater.py     # ежедневный джоб обновления Elo по результатам
 ├── probability.py     # утилиты: implied_prob, remove_overround, consensus_probabilities
+├── sstats_client.py   # клиент sstats.net: xG/winProb/Glicko для model_gap
 ├── detectors.py       # 6 детекторов: spread, drift, synchronized, model_gap, exotic_spread, sharp_move
+├── clv.py             # closing line value: оценка сигнальной ценности алертов
 ├── notifier.py        # отправка алертов в Telegram (использует общий Bot)
-├── bot.py             # команды бота: /stats /recent /thresholds /elo
-└── pipeline.py        # один цикл: fetch → фильтр → детект → save → alert
+├── bot.py             # команды бота: /stats /accuracy /clv /recent /thresholds /elo
+└── pipeline.py        # один цикл: fetch → xG-обогащение → детект → save → alert
 ```
 
 ## Как запускать
@@ -51,15 +53,22 @@ python -m src.main
 
 - `FOOTBALL_DATA_KEY` — https://www.football-data.org/client/register
   (без него Elo не обновляется → детектор `model_gap` шумит)
+- `SSTATS_API_KEY` — https://sstats.net (xG/winProb/Glicko для `model_gap`;
+  без ключа детектор работает по Elo-fallback)
+- `SSTATS_ENABLED` — `true` по умолчанию; `false` для аварийного отключения
+  sstats-обогащения без удаления ключа
 
 ## Известные особенности и подводные камни
 
-- **Лимит Odds API.** На бесплатном тарифе 500 запросов/мес. При
-  `POLL_INTERVAL_MINUTES=15` это 2880/мес — превышение. Дефолт безопаснее
-  ставить `90`. Это стоит проверять при любых изменениях расписания.
-- **`model_gap` шумит первые 1–2 недели**, пока Elo-рейтинги не наберут
-  статистику. По умолчанию порог высокий (0.20). Если Elo не обновляется —
-  совсем отключи детектор, подняв порог в `.env` до 1.0.
+- **Лимит Odds API.** Аккаунт на Pro-тарифе — учёт дневной квоты убран
+  полностью (нет `quota.py`, нет проверок в `pipeline.py`).
+  `POLL_INTERVAL_MINUTES=15` теперь допустимо. Если тариф снова станет
+  лимитированным — восстанавливать счётчик квоты заново.
+- **`model_gap`: сначала sstats, fallback на Elo.** Если есть `SSTATS_API_KEY`
+  и матч покрыт sstats.net — fair-odds берутся из xG/winProb (точно с первого
+  дня). Без покрытия — fallback на Elo, который шумит первые 1–2 недели, пока
+  рейтинги не наберут статистику (порог по умолчанию 0.20). Источник модели
+  пишется в `payload["source"]` ∈ {`sstats_xg`, `elo`}.
 - **Нормализация имён команд.** Odds API и football-data.org называют
   команды по-разному ("Manchester United" vs "Manchester United FC").
   В `elo.py` есть `_normalize`, в `results_client.py` — `normalize_team_name`.
@@ -139,20 +148,40 @@ Sharp-конторы (Pinnacle, Betfair, SBObet, Matchbook) двигают ры�
 `draw_share = max(0.18, min(0.32, 0.30 - 0.0003 × |Δelo|))`.
 Чем равнее команды — тем выше вероятность ничьей.
 
+### CLV (closing line value)
+
+`clv.py` — единственная честная метрика прогностической ценности алертов.
+Для направленных детекторов (drift↑, synchronized↓, model_gap value-side,
+sharp_move) сравнивается консенсус-вероятность «ставочной стороны» в момент
+алерта и в последнем снимке до старта матча. `+CLV` = рынок продолжил
+двигаться в сторону прогноза.
+
+Не-направленные детекторы (spread, exotic_spread) и кейсы без снимков пишут
+sentinel-строку с NULL — `compute_pending_clv` (ежечасный джоб) идемпотентен
+и не пересчитывает уже обработанные аномалии. Результат смотреть командой
+`/clv`. Положительный CLV необходим, но не достаточен для прибыльности —
+нужно ещё перекрыть маржу букмекера.
+
 ## Тесты
 
-Тесты находятся в `tests/`. Запускать: `pytest -v`. 61 тест, 0 сетевых
-запросов — всё на синтетических данных и in-memory SQLite.
+Тесты находятся в `tests/`. Запускать: `pytest -v`. 93 теста, 0 сетевых
+запросов — всё на синтетических данных, in-memory SQLite и httpx.MockTransport.
+
+`conftest.py` нет: `Settings()` читает реальный `.env` (он gitignored, но
+присутствует локально). Тесты детекторов завязаны на значения порогов из
+`.env` — при их правке проверять, что тесты ещё проходят.
 
 ```
 tests/
-├── conftest.py                      # dummy env vars для Settings()
 ├── test_probability.py              # implied_prob, remove_overround, consensus
 ├── test_detectors_spread.py         # detect_spread в процентных пунктах
 ├── test_detectors_drift.py          # скользящее окно дрейфа
 ├── test_detectors_synchronized.py   # sharp-фильтр для synchronized
 ├── test_detectors_time_bucket.py    # временны́е корзины
+├── test_detectors_model_gap_xg.py   # model_gap: xG-путь и Elo-fallback
 ├── test_probability_weights.py      # веса букмекеров, weighted median
+├── test_sstats_client.py            # sstats клиент (mock transport)
+├── test_clv.py                      # closing line value
 ├── test_elo_bootstrap.py            # загрузка рейтингов с clubelo.com
 └── test_elo_draw_share.py           # динамическая доля ничьих
 ```
