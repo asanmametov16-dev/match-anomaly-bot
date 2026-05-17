@@ -217,18 +217,31 @@ async def check_anomaly_results(days_back: int = 3,
                 yes = sum(1 for c in confirmed_flags if c)
                 overall = yes > len(confirmed_flags) / 2
 
-            await send_result_message(
-                home_team=first.home_team,
-                away_team=first.away_team,
-                home_score=result.home_score,
-                away_score=result.away_score,
-                commence_time=first.commence_time,
-                competition=result.competition or "",
-                detector_verdicts=detector_verdicts,
-                overall=overall,
+            # Итог в Telegram — ТОЛЬКО по матчам, на которые реально уходил
+            # алерт: кластер прошёл precision-gate → ≥1 аномалия со
+            # signal_confidence='signal'. Слабые кластеры в Telegram не
+            # анонсировались, поэтому и результат по ним слать не надо
+            # (раньше слались итоги по ВСЕМ матчам с аномалиями → шум,
+            # рассинхрон с алертами, пачки telegram TimedOut). Внутренняя
+            # статистика (AnomalyOutcome) ниже пишется по ВСЕМ — режим
+            # широкого сбора CLV/accuracy не страдает.
+            was_alerted = any(
+                (a.payload or {}).get("signal_confidence") == "signal"
+                for a in match_anomalies
             )
+            if was_alerted:
+                await send_result_message(
+                    home_team=first.home_team,
+                    away_team=first.away_team,
+                    home_score=result.home_score,
+                    away_score=result.away_score,
+                    commence_time=first.commence_time,
+                    competition=result.competition or "",
+                    detector_verdicts=detector_verdicts,
+                    overall=overall,
+                )
 
-            # Сохраняем вердикты для статистики
+            # Сохраняем вердикты для статистики (по ВСЕМ, не только alerted)
             for detector, confirmed in detector_verdicts:
                 session.add(AnomalyOutcome(
                     result_key=result_key,
