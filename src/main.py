@@ -98,20 +98,26 @@ async def main() -> None:
         next_run_time=datetime.now(),
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=None,  # старт-прогон не выбрасывать как misfire
         id="elo_update",
     )
     # Проверки результатов/CLV/калибровки: запуск СРАЗУ на старте
-    # (next_run_time=now) И каждый час. Раньше IntervalTrigger без
-    # next_run_time стартовал только через полный интервал → каждый
-    # рестарт откладывал резолв результатов на 1–2ч (бэклог не
-    # догонялся). Все три идемпотентны (ResultNotification-дедуп,
-    # compute_pending_* пропускают сделанное; max_instances=1+coalesce).
+    # (next_run_time=now) И каждый час. ВАЖНО: misfire_grace_time=None —
+    # next_run_time берётся в момент add_job, а джобы стартуют только
+    # после scheduler.start() (через ~1–2с: app.initialize→start→
+    # polling). Эта задержка > дефолтных 1с grace → старт-прогон иначе
+    # считается misfire и ВЫБРАСЫВАЕТСЯ (переносится на след. час) —
+    # ровно поэтому после рестарта результаты не резолвились. None =
+    # «выполнить, как бы поздно ни было». Все идемпотентны
+    # (ResultNotification-дедуп, compute_pending_* пропускают сделанное;
+    # max_instances=1+coalesce от наложений).
     scheduler.add_job(
         check_anomaly_results,
         IntervalTrigger(hours=1),
         next_run_time=datetime.now(),
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=None,
         id="result_check",
     )
     scheduler.add_job(
@@ -120,6 +126,7 @@ async def main() -> None:
         next_run_time=datetime.now(),
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=None,
         id="clv_compute",
     )
     scheduler.add_job(
@@ -135,6 +142,7 @@ async def main() -> None:
         next_run_time=datetime.now(),
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=None,
         id="prob_calibration",
     )
     scheduler.add_job(
