@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .clv import extract_bet_side
 from .db import Anomaly, AnomalyOutcome, MatchResult, ResultNotification, SessionLocal
 from .notifier import send_result_message
 from .results_client import fetch_finished_matches, normalize_team_name
@@ -75,28 +76,12 @@ def _result_key(home: str, away: str, dt: datetime) -> str:
     return f"{dt.date().isoformat()}|{normalize_team_name(home)}|{normalize_team_name(away)}"
 
 
-def _backed_outcome(detector: str, payload: dict) -> str | None:
-    """Возвращает исход, который детектор считал 'поддержанным рынком'.
-
-    Только для направленных детекторов. spread и exotic_spread направления
-    не имеют — возвращаем None.
-    """
-    if detector == "model_gap":
-        # рынок < модели → рынок backing этот исход сильнее Elo
-        if payload.get("market", 999.0) < payload.get("fair", 0.0):
-            return payload.get("outcome")
-    elif detector == "drift":
-        # коэф. упал с момента открытия → рынок backing
-        if payload.get("current", 999.0) < payload.get("opening", 0.0):
-            return payload.get("outcome")
-    elif detector == "synchronized":
-        # синхронное падение у нескольких контор → рынок backing
-        if payload.get("direction") == "↓":
-            return payload.get("outcome")
-    elif detector == "sharp_move":
-        # sharp_prob > soft_prob → профессионалы backing этот исход
-        return payload.get("outcome")
-    return None
+# Направление = ЕДИНЫЙ источник правды: clv.extract_bet_side (тот же,
+# что у precision-gate и CLV). Раньше тут была локальная копия
+# _backed_outcome, которая для model_gap указывала ПРОТИВОПОЛОЖНУЮ
+# сторону (market<fair вместо value-side market>fair), а для drift
+# читала несуществующие ключи (current/opening вместо *_prob/drift_pp)
+# → /accuracy мерил инвертированную гипотезу и терял drift целиком.
 
 
 def clear_false_sentinels() -> int:
@@ -218,7 +203,7 @@ async def check_anomaly_results(days_back: int = 3,
                 if a.detector in seen_detectors:
                     continue
                 seen_detectors.add(a.detector)
-                backed = _backed_outcome(a.detector, a.payload or {})
+                backed = extract_bet_side(a.detector, a.payload or {})
                 if backed is not None:
                     c = backed == actual
                     confirmed_flags.append(c)
