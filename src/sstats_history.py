@@ -22,7 +22,7 @@ from .config import settings
 from .db import SessionLocal, SstatsModelOutcome, init_db
 from .prob_calibration import brier_score, log_loss
 from .results_client import FinishedMatch
-from .sstats_client import BASE_URL, _fetch_xg, _redact
+from .sstats_client import BASE_URL, _fetch_xg, _redact, sstats_get
 
 log = logging.getLogger(__name__)
 
@@ -95,11 +95,10 @@ def _actual(hs: int, as_: int) -> str:
 async def _fetch_ended_page(client: httpx.AsyncClient, offset: int,
                             limit: int) -> list[dict]:
     try:
-        r = await client.get(
-            f"{BASE_URL}/Games/list",
-            params={"Ended": "true", "Order": -1, "Limit": limit,
-                    "Offset": offset, "apikey": settings.sstats_api_key},
-            timeout=30.0,
+        r = await sstats_get(
+            client, f"{BASE_URL}/Games/list",
+            {"Ended": "true", "Order": -1, "Limit": limit,
+             "Offset": offset, "apikey": settings.sstats_api_key},
         )
         r.raise_for_status()
         return (r.json() or {}).get("data") or []

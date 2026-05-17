@@ -15,6 +15,7 @@ swallow'аются — на любой fail возвращаем None / пуст
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -37,7 +38,27 @@ log = logging.getLogger(__name__)
 
 BASE_URL = "https://api.sstats.net"
 CACHE_TTL = timedelta(hours=24)
-HTTP_TIMEOUT = 30.0
+
+# httpx float/Timeout ПЕР-ФАЗНЫЕ (connect/read/write/pool по отдельности),
+# ОБЩЕГО дедлайна у httpx нет: интермиттентно зависший после заголовков
+# trickle-ответ sstats обходит read-таймаут и висит фактически вечно
+# (вешало бэкфилл и резолв результатов, CPU=0, без исключения).
+# Решение: гранулярный httpx.Timeout + ЖЁСТКИЙ общий потолок через
+# asyncio.wait_for (абсолютного дедлайна у httpx нет).
+HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=5.0)
+SSTATS_TOTAL_DEADLINE = 25.0  # сек — потолок на ВЕСЬ запрос
+
+
+async def sstats_get(client: httpx.AsyncClient, url: str,
+                     params: dict) -> httpx.Response:
+    """GET к sstats с гранулярным httpx-таймаутом И жёстким общим
+    дедлайном. При зависании поднимает asyncio.TimeoutError —
+    вызывающие ловят общим `except Exception` и деградируют мягко
+    (пропуск страницы/дня/xg), а не висят навсегда."""
+    return await asyncio.wait_for(
+        client.get(url, params=params, timeout=HTTP_TIMEOUT),
+        timeout=SSTATS_TOTAL_DEADLINE,
+    )
 
 
 @dataclass
@@ -94,10 +115,10 @@ async def _fetch_day_index(client: httpx.AsyncClient, date_str: str) -> dict[tup
         return cached.index
 
     try:
-        r = await client.get(
-            f"{BASE_URL}/Games/list",
-            params={"Date": date_str, "Limit": 1000, "apikey": settings.sstats_api_key},
-            timeout=HTTP_TIMEOUT,
+        r = await sstats_get(
+            client, f"{BASE_URL}/Games/list",
+            {"Date": date_str, "Limit": 1000,
+             "apikey": settings.sstats_api_key},
         )
         r.raise_for_status()
         games = (r.json() or {}).get("data") or []
@@ -131,10 +152,9 @@ async def _fetch_xg(client: httpx.AsyncClient, sstats_id: int) -> XgPrediction |
         return cached[1]
 
     try:
-        r = await client.get(
-            f"{BASE_URL}/Games/glicko/{sstats_id}",
-            params={"apikey": settings.sstats_api_key},
-            timeout=HTTP_TIMEOUT,
+        r = await sstats_get(
+            client, f"{BASE_URL}/Games/glicko/{sstats_id}",
+            {"apikey": settings.sstats_api_key},
         )
         r.raise_for_status()
         gl = ((r.json() or {}).get("data") or {}).get("glicko") or {}
