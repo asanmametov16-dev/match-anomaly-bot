@@ -1,0 +1,18 @@
+[Unit]
+Description=Match Anomaly Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mab
+WorkingDirectory=/opt/match-anomaly-bot
+ExecStart=/opt/match-anomaly-bot/.venv/bin/python -m src.main
+Restart=always
+RestartSec=10
+MemoryMax=400M
+Nice=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
