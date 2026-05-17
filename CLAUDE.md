@@ -83,9 +83,18 @@ python -m src.main
   команды по-разному ("Manchester United" vs "Manchester United FC").
   В `elo.py` есть `_normalize`, в `results_client.py` — `normalize_team_name`.
   При проблемах с матчингом смотреть туда.
-- **Дедупликация алертов.** В `pipeline.py` есть in-memory словарь
-  `_recently_alerted` с окном 2 часа. После рестарта бот может прислать
-  дубль — это known limitation MVP.
+- **Три РАЗНЫЕ дедуп-задачи в `pipeline.py` (не смешивать).** (1) Состав
+  кластера для `classify_signal` — берётся ПОЛНЫЙ одновременный набор
+  хитов, БЕЗ дедупа (иначе зреющая за несколько циклов аномалия не
+  наберёт MIN_DETECTORS и `signal_confidence` запишется неверно).
+  (2) Дедуп ЗАПИСИ — `_was_recently_saved` (БД, per match+detector, окно
+  `DEDUP_WINDOW`=12ч): не плодим дубль-строки `Anomaly` каждые 30 мин,
+  но штамп берётся из полного кластера. (3) Дедуп ОТПРАВКИ —
+  `_was_match_alerted`/`_mark_match_alerted` (in-memory словарь
+  `_alerted_at`, per match, 12ч) по ФАКТУ отправки, не по сохранённым
+  аномалиям. После рестарта дедуп отправки сбрасывается → возможен дубль
+  (known limitation MVP, см. идею #3). Ранее сохранённые ряды НЕ
+  переписываются — отражают кластер на свой момент.
 - **Telegram-приложение и шедулер.** В `main.py` строгий порядок:
   `app.initialize() → app.start() → updater.start_polling() → scheduler.start()`.
   При изменениях в этой части ничего не упрощать без проверки на запуске.
