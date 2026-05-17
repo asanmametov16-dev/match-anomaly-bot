@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import logging
-import statistics
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -51,8 +50,8 @@ _DETECTOR_META: dict[str, tuple[str, str]] = {
         "\"умных денег\": кто-то ставит сразу в несколько мест.",
     ),
     "model_gap": (
-        "Рынок расходится с Elo-моделью",
-        "",  # генерируется динамически
+        "Рынок расходится с моделью",
+        "",  # генерируется динамически (_model_gap_explanation, по source)
     ),
     "exotic_spread": (
         "Разброс на тоталах / форах",
@@ -73,87 +72,17 @@ _DETECTOR_META: dict[str, tuple[str, str]] = {
 }
 
 
-def _implied_probabilities(match: MatchOdds) -> list[tuple[str, float, float]]:
-    """Нормализованные вероятности исходов по медианным коэффициентам.
-
-    Возвращает список (outcome, probability, median_odds), отсортированный
-    по убыванию вероятности.
-    """
-    medians: dict[str, float] = {}
-    for outcome in ("home", "draw", "away"):
-        prices = [getattr(b, outcome) for b in match.bookmakers]
-        clean = [p for p in prices if p is not None and p > 1.0]
-        if clean:
-            medians[outcome] = statistics.median(clean)
-
-    if not medians:
-        return []
-
-    raw = {k: 1.0 / v for k, v in medians.items()}
-    total = sum(raw.values())
-    return sorted(
-        [(k, raw[k] / total, medians[k]) for k in raw],
-        key=lambda x: -x[1],
-    )
-
-
-def _backed_outcome_from_hit(hit: AnomalyHit) -> str | None:
-    """Исход, который детектор считает 'поддержанным рынком'."""
-    payload = hit.payload or {}
-    if hit.detector == "model_gap":
-        if payload.get("market", 999.0) < payload.get("fair", 0.0):
-            return payload.get("outcome")
-    elif hit.detector == "drift":
-        if payload.get("current", 999.0) < payload.get("opening", 0.0):
-            return payload.get("outcome")
-    elif hit.detector == "synchronized":
-        if payload.get("direction") == "↓":
-            return payload.get("outcome")
-    elif hit.detector == "sharp_move":
-        # sharp_prob > soft_prob → sharps backing этот исход
-        if payload.get("sharp_prob", 0.0) > payload.get("soft_prob", 0.0):
-            return payload.get("outcome")
-    return None
-
-
-def _anomaly_adjusted_probabilities(
-    match: MatchOdds, hits: list[AnomalyHit]
-) -> list[tuple[str, float, float, float]]:
-    """Вероятности, скорректированные на сигналы аномалий.
-
-    Алгоритм:
-    1. Базовые вероятности из медианных коэффициентов (с нормализацией маржи).
-    2. Каждый направленный детектор увеличивает вероятность «поддержанного»
-       исхода пропорционально severity (насколько сильна аномалия).
-    3. Перенормировка.
-
-    Возвращает (outcome, adjusted_prob, base_prob, median_odds).
-    """
-    base = _implied_probabilities(match)
-    if not base:
-        return []
-
-    base_probs = {o: p for o, p, _ in base}
-    odds_map = {o: od for o, _, od in base}
-
-    boost: dict[str, float] = {k: 0.0 for k in base_probs}
-    for hit in hits:
-        backed = _backed_outcome_from_hit(hit)
-        if backed and backed in boost:
-            boost[backed] += hit.severity
-
-    adjusted = {k: base_probs[k] * (1.0 + boost[k]) for k in base_probs}
-    total = sum(adjusted.values())
-    normalized = {k: v / total for k, v in adjusted.items()}
-
-    return sorted(
-        [(k, normalized[k], base_probs[k], odds_map[k]) for k in normalized],
-        key=lambda x: -x[1],
-    )
+# Прежние _implied_probabilities / _backed_outcome_from_hit /
+# _anomaly_adjusted_probabilities удалены: «скорректированная вероятность»
+# суммировала несопоставимые severity и порождала EV-вердикт (ставочная
+# рамка). Направление теперь — единственный источник: precision-gate
+# (meta) + extract_bet_side. Блок вероятностей показывает честный
+# маржа-free консенсус рынка (см. _format_probabilities).
 
 
 def _format_signal(hits: list[AnomalyHit], match: MatchOdds,
-                   meta: dict | None = None) -> str:
+                   meta: dict | None = None,
+                   score: float | None = None) -> str:
     """Формирует строку с направлением сигнала.
 
     Источник истины — precision-gate (`classify_signal`/meta): именно он
@@ -165,49 +94,58 @@ def _format_signal(hits: list[AnomalyHit], match: MatchOdds,
     """
     from .clv import extract_bet_side
 
-    score: dict[str, float] = {"home": 0.0, "draw": 0.0, "away": 0.0}
-    detector_count: dict[str, int] = {"home": 0, "draw": 0, "away": 0}
-
-    for hit in hits:
-        backed = extract_bet_side(hit.detector, hit.payload or {})
-        if backed and backed in score:
-            score[backed] += hit.severity
-            detector_count[backed] += 1
-
-    total_score = sum(score.values())
-
-    if meta and meta.get("side") in score:
-        # Авторитетная сторона от гейта — без противоречий с gate-строкой.
-        best = meta["side"]
-        best_score = score[best]
-    else:
-        if total_score == 0:
-            return ""  # только ненаправленные детекторы
-        best = max(score, key=lambda k: score[k])
-        best_score = score[best]
-        # Вердикт «противоречивый» — только в fallback без гейта.
-        if best_score / total_score < 0.55:
-            return ("📌 <b>Сигнал:</b> <i>противоречивый — детекторы "
-                    "указывают в разные стороны</i>")
-
     outcome_names = {
         "home": f"Победа хозяев ({escape(match.home_team)})",
         "away": f"Победа гостей ({escape(match.away_team)})",
         "draw": "Ничья",
     }
 
-    # Сила сигнала
-    n = detector_count[best]
-    if best_score >= 0.6 or n >= 3:
+    if meta and meta.get("side") in outcome_names:
+        # Источник истины — precision-gate. Сила выводится ИЗ ГЕЙТА
+        # (CLV-взвешенный score + число направленных детекторов), теми
+        # же порогами, что «уверенность» в шапке, — а не из суммы
+        # несопоставимых severity (drift в пп ≫ sharp_move в долях).
+        best = meta["side"]
+        nd = int(meta.get("side_detectors", 0) or 0)
+        agree = float(meta.get("agreement", 0.0) or 0.0)
+        if (score is not None and score >= 5) or nd >= 3:
+            strength, icon = "сильный", "🔥"
+        elif (score is not None and score >= 3) or nd >= 2:
+            strength, icon = "средний", "⚡"
+        else:
+            strength, icon = "слабый", "💧"
+        return (
+            f"📌 <b>Сигнал:</b> {icon} {outcome_names[best]} — <b>{strength}</b>\n"
+            f"   <i>(направленных за сторону: {nd}, согласие {agree*100:.0f}%)</i>"
+        )
+
+    # Fallback без гейта (signal_gate_enabled=false): severity-эвристика.
+    sev: dict[str, float] = {"home": 0.0, "draw": 0.0, "away": 0.0}
+    cnt: dict[str, int] = {"home": 0, "draw": 0, "away": 0}
+    for hit in hits:
+        backed = extract_bet_side(hit.detector, hit.payload or {})
+        if backed and backed in sev:
+            sev[backed] += hit.severity
+            cnt[backed] += 1
+
+    total_sev = sum(sev.values())
+    if total_sev == 0:
+        return ""  # только ненаправленные детекторы
+    best = max(sev, key=lambda k: sev[k])
+    if sev[best] / total_sev < 0.55:
+        return ("📌 <b>Сигнал:</b> <i>противоречивый — детекторы "
+                "указывают в разные стороны</i>")
+
+    n = cnt[best]
+    if sev[best] >= 0.6 or n >= 3:
         strength, icon = "сильный", "🔥"
-    elif best_score >= 0.3 or n >= 2:
+    elif sev[best] >= 0.3 or n >= 2:
         strength, icon = "средний", "⚡"
     else:
         strength, icon = "слабый", "💧"
-
     return (
         f"📌 <b>Сигнал:</b> {icon} {outcome_names[best]} — <b>{strength}</b>\n"
-        f"   <i>({n} детектор(а), суммарная сила {best_score:.2f})</i>"
+        f"   <i>({n} детектор(а), суммарная сила {sev[best]:.2f})</i>"
     )
 
 
@@ -222,10 +160,24 @@ def _best_odds(match: MatchOdds) -> dict[str, float]:
     return result
 
 
-def _format_probabilities(match: MatchOdds, hits: list[AnomalyHit]) -> str:
-    results = _anomaly_adjusted_probabilities(match, hits)
-    if not results:
+def _format_probabilities(match: MatchOdds) -> str:
+    """Честный рыночный расклад: МАРЖА-FREE консенсус вероятностей + лучший
+    доступный коэффициент по каждому исходу.
+
+    Никаких «скорректированных» вероятностей, EV и stake-рамки — это
+    аналитический сигнал, а не ставочная рекомендация (см. CLAUDE.md /
+    _SIGNAL_DISCLAIMER). Цифра справочная: что рынок думает об исходе
+    после снятия маржи (метод из probability.py).
+    """
+    from .probability import consensus_probabilities
+
+    cp = consensus_probabilities(match)
+    if not cp:
         return ""
+    s = sum(v for v in cp.values() if v and v > 0.0)
+    if s <= 0.0:
+        return ""
+    cp = {k: v / s for k, v in cp.items() if v and v > 0.0}
 
     best = _best_odds(match)
     outcome_names = {
@@ -236,53 +188,52 @@ def _format_probabilities(match: MatchOdds, hits: list[AnomalyHit]) -> str:
     medals = ["🥇", "🥈", "🥉"]
 
     lines = []
-    for i, (outcome, adj_prob, base_prob, median_odds) in enumerate(results):
+    for i, (outcome, prob) in enumerate(
+        sorted(cp.items(), key=lambda kv: -kv[1])
+    ):
         medal = medals[i] if i < len(medals) else "  "
-
-        diff = adj_prob - base_prob
-        trend = ""
-        if diff > 0.02:
-            trend = f" ↑{diff*100:.0f}пп"
-        elif diff < -0.02:
-            trend = f" ↓{abs(diff)*100:.0f}пп"
-
-        best_odd = best.get(outcome, median_odds)
-        ev = adj_prob * best_odd - 1
-        if ev > 0.03:
-            ev_str = f"  ✅ EV <b>+{ev*100:.1f}%</b>"
-        elif ev > 0:
-            ev_str = f"  ⚠️ EV +{ev*100:.1f}%"
-        else:
-            ev_str = f"  ❌ EV {ev*100:.1f}%"
-
+        bo = best.get(outcome)
+        odds_str = f"  (лучший коэф: {bo:.2f})" if bo else ""
         lines.append(
-            f"{medal} {outcome_names[outcome]}: "
-            f"<b>{adj_prob * 100:.0f}%</b>{escape(trend)}"
-            f"  (лучший коэф: {best_odd:.2f})"
-            f"{ev_str}"
+            f"{medal} {outcome_names.get(outcome, outcome)}: "
+            f"<b>{prob * 100:.0f}%</b>{odds_str}"
         )
     return "\n".join(lines)
 
 
 def _model_gap_explanation(group: list[AnomalyHit]) -> str:
-    market_lower: list[str] = []  # рынок ниже модели → рынок считает фаворитом
+    """Текст ветвится по payload['source']: модель у model_gap — это
+    sstats-xG / консенсус sharp-контор / Elo (см. detect_model_gap).
+    Раньше всегда писалось «Elo-модель» — после перевода на маржа-free
+    это было фактически неверно для xg/sharp."""
+    source = (group[0].payload.get("source") if group else "") or ""
+    model_name = {
+        "sstats_xg": "xG-моделью sstats",
+        "sharp_consensus": "консенсусом sharp-контор",
+        "elo": "Elo-моделью",
+    }.get(source, "моделью")
+    if source == "elo":
+        caveat = (" Elo не учитывает свежие данные (травма, смена тренера, "
+                  "серия результатов) и шумит первые 1–2 недели после старта.")
+    elif source == "sharp_consensus":
+        caveat = (" Референс — медиана sharp-контор: расхождение значит, что "
+                  "общий рынок ещё не подтянулся к острым деньгам.")
+    elif source == "sstats_xg":
+        caveat = (" Референс — xG/winProb sstats: рынок оценивает матч иначе, "
+                  "чем модель по ожидаемым голам.")
+    else:
+        caveat = ""
+
+    market_lower: list[str] = []  # market<fair → рынок ценит исход выше модели
     for hit in group:
         outcome = hit.payload.get("outcome", "")
-        market = hit.payload.get("market", 0.0)
-        fair = hit.payload.get("fair", 0.0)
-        if market < fair:
+        if hit.payload.get("market", 0.0) < hit.payload.get("fair", 0.0):
             market_lower.append(_OUTCOME_RU_ACC.get(outcome, outcome))
     if market_lower:
         favored = " и ".join(market_lower)
-        return (
-            f"Рынок оценивает {favored} фаворитом значительно сильнее, чем Elo-модель. "
-            "Возможные причины: Elo не учитывает свежие данные (травма, смена тренера, "
-            "серия результатов). Модель шумит первые 1–2 недели после старта."
-        )
-    return (
-        "Рынок и Elo-модель расходятся в оценке матча. "
-        "Модель шумит первые 1–2 недели, пока рейтинги не наберут статистику."
-    )
+        return (f"Рынок оценивает {favored} фаворитом заметно сильнее, чем "
+                f"{model_name}.{caveat}")
+    return f"Рынок и оценка {model_name} расходятся в этом матче.{caveat}"
 
 
 _SIGNAL_DISCLAIMER = (
@@ -353,13 +304,14 @@ def _format_message(match: MatchOdds, hits: list[AnomalyHit], score: float,
             lines.append(f"  💡 <i>{escape(explanation)}</i>")
         lines.append("")
 
-    signal = _format_signal(hits, match, meta)
+    signal = _format_signal(hits, match, meta, score)
     if signal:
         lines += ["", signal]
 
-    prob_block = _format_probabilities(match, hits)
+    prob_block = _format_probabilities(match)
     if prob_block:
-        lines += ["", "<b>Вероятные исходы событий:</b>", prob_block]
+        lines += ["", "<b>Рыночная оценка (маржа-free консенсус):</b>",
+                  prob_block]
 
     lines += ["", _SIGNAL_DISCLAIMER]
     return "\n".join(lines)
