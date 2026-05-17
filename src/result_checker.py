@@ -1,6 +1,7 @@
 """Джоб проверки результатов матчей с аномалиями и отправки итогов в Telegram."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
@@ -12,6 +13,11 @@ from .clv import extract_bet_side
 from .db import Anomaly, AnomalyOutcome, MatchResult, ResultNotification, SessionLocal
 from .notifier import send_result_message
 from .results_client import fetch_finished_matches, normalize_team_name
+
+# Жёсткий дедлайн вторичного sstats-источника (сек). Здоровый
+# multi-page fetch укладывается; зависший — обрубается, резолв идёт
+# дальше по football-data + БД.
+SSTATS_SECONDARY_TIMEOUT = 60
 
 # Минимальное среднее сходство имён команд для принятия совпадения.
 # 0.75 отсекает явно разные клубы, но пропускает варианты написания.
@@ -118,8 +124,26 @@ async def check_anomaly_results(days_back: int = 3,
     # широкое окно catch-up обслуживает sstats.
     fd_days = min(days_back, 10)
     finished = list(await fetch_finished_matches(days_back=fd_days))
-    finished += await fetch_finished_matches_sstats(
-        days_back=days_back, max_pages=sstats_max_pages)
+
+    # sstats — ВТОРИЧНЫЙ источник и НЕ должен блокировать резолв: его
+    # /Games/list иногда висит дольше httpx-таймаута (тот же отказ, что
+    # вешал бэкфилл). Жёсткий внешний дедлайн: при зависании идём дальше
+    # на football-data + уже сохранённые MatchResult, а не блокируем
+    # навсегда весь резолв/outcomes/Telegram (max_instances=1 → один
+    # подвисший прогон иначе глушит и все часовые тики).
+    try:
+        finished += await asyncio.wait_for(
+            fetch_finished_matches_sstats(
+                days_back=days_back, max_pages=sstats_max_pages),
+            timeout=SSTATS_SECONDARY_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "sstats второй источник не ответил за %ss — пропускаем, "
+            "резолвим по football-data + БД", SSTATS_SECONDARY_TIMEOUT)
+    except Exception as e:  # sstats best-effort, не валим резолв
+        log.warning("sstats второй источник упал: %s", e)
+
     if not finished:
         return
 
