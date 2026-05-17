@@ -22,7 +22,8 @@ class Settings(BaseSettings):
 
     # Расписание
     poll_interval_minutes: int = 15
-    elo_update_hour_utc: int = 9  # ежедневно в 09:00 UTC (12:00 МСК)
+    elo_update_hour_utc: int = 9  # DEPRECATED: Elo-апдейт теперь по
+    # интервалу (при старте + каждые 2ч), не по часу. Поле не используется.
 
     # Пороги детекторов
     spread_threshold: float = 0.08          # deprecated, kept for rollback

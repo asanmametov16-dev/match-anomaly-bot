@@ -10,11 +10,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from telegram.error import NetworkError
@@ -94,14 +94,22 @@ async def main() -> None:
     )
     scheduler.add_job(
         update_elo_from_results,
-        CronTrigger(hour=settings.elo_update_hour_utc, minute=0),
+        IntervalTrigger(hours=2),
+        next_run_time=datetime.now(),
         max_instances=1,
         coalesce=True,
         id="elo_update",
     )
+    # Проверки результатов/CLV/калибровки: запуск СРАЗУ на старте
+    # (next_run_time=now) И каждый час. Раньше IntervalTrigger без
+    # next_run_time стартовал только через полный интервал → каждый
+    # рестарт откладывал резолв результатов на 1–2ч (бэклог не
+    # догонялся). Все три идемпотентны (ResultNotification-дедуп,
+    # compute_pending_* пропускают сделанное; max_instances=1+coalesce).
     scheduler.add_job(
         check_anomaly_results,
-        IntervalTrigger(hours=2),
+        IntervalTrigger(hours=1),
+        next_run_time=datetime.now(),
         max_instances=1,
         coalesce=True,
         id="result_check",
@@ -109,6 +117,7 @@ async def main() -> None:
     scheduler.add_job(
         compute_pending_clv,
         IntervalTrigger(hours=1),
+        next_run_time=datetime.now(),
         max_instances=1,
         coalesce=True,
         id="clv_compute",
@@ -122,7 +131,8 @@ async def main() -> None:
     )
     scheduler.add_job(
         compute_pending_calibration,
-        IntervalTrigger(hours=2),
+        IntervalTrigger(hours=1),
+        next_run_time=datetime.now(),
         max_instances=1,
         coalesce=True,
         id="prob_calibration",
@@ -141,8 +151,9 @@ async def main() -> None:
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
     scheduler.start()
-    log.info("Шедулер запущен: опрос каждые %d мин, Elo-апдейт в %02d:00 UTC",
-             settings.poll_interval_minutes, settings.elo_update_hour_utc)
+    log.info("Шедулер запущен: опрос каждые %d мин; result/CLV/calib — "
+             "при старте и каждый час; Elo — при старте и каждые 2ч",
+             settings.poll_interval_minutes)
 
     await send_startup_message()
 
