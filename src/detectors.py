@@ -629,9 +629,11 @@ def classify_signal(hits: list[AnomalyHit]) -> tuple[str, dict]:
     """Precision-gate: «точный сигнал» против «слабого наблюдения».
 
     Точный сигнал = несколько разных детекторов + высокий CLV-взвешенный
-    счёт + детекторы исторически CLV-подтверждены (множитель ≥ порога) +
-    однонаправленный консенсус. Слабые кластеры всё равно сохраняются
-    (помечаются confidence=weak), но не эскалируются в Telegram.
+    счёт (CLV влияет ТОЛЬКО через compute_score) + направление подтверждено
+    ≥N разными направленными детекторами + согласие ≥ порога. Детекторы,
+    исторически доказанно шумные (CLV-множитель на полу клампа),
+    исключаются из решения (см. _exclude). Слабые кластеры сохраняются
+    (confidence=weak), но не эскалируются в Telegram.
 
     Это НЕ ставочная рекомендация — лишь оценка качества рыночного сигнала.
     Возвращает (label ∈ {"signal","weak"}, meta).
@@ -640,18 +642,30 @@ def classify_signal(hits: list[AnomalyHit]) -> tuple[str, dict]:
 
     from .clv import extract_bet_side
 
-    # model_gap из лиги с ненадёжной sstats-моделью не участвует в решении
-    # о «сигнале» (но сохраняется и помечается отдельно). См. #3.
-    dropped_untrusted = sum(
-        1 for h in hits
-        if h.detector == "model_gap"
-        and (h.payload or {}).get("model_trust") == "unreliable"
-    )
-    hits = [
-        h for h in hits
-        if not (h.detector == "model_gap"
-                and (h.payload or {}).get("model_trust") == "unreliable")
-    ]
+    # Исключения из решения о «точном сигнале» (запись всё равно
+    # сохраняется и метится — см. meta):
+    #  (1) model_gap из лиги с ненадёжной sstats-моделью (#3);
+    #  (2) детектор, чей CLV-множитель НА ПОЛУ клампа — исторически
+    #      доказанный шум. Это P2-замена прежнего mean_mult≥порога:
+    #      невзвешенное среднее было двойным счётом CLV и щёлкало в
+    #      «нет сигналов» ровно при созревании CLV на строгом профиле.
+    #      Cold-start безопасен: холодный множитель = 1.0, до пола
+    #      (clv_calibration_min_multiplier) далеко. CLV по-прежнему
+    #      влияет на силу — через compute_score (× множитель).
+    _floor = settings.clv_calibration_min_multiplier + 1e-9
+
+    def _exclude(h: AnomalyHit) -> str | None:
+        if (h.detector == "model_gap"
+                and (h.payload or {}).get("model_trust") == "unreliable"):
+            return "untrusted"
+        if detector_multiplier(h.detector) <= _floor:
+            return "noisy"
+        return None
+
+    dropped_untrusted = sum(1 for h in hits if _exclude(h) == "untrusted")
+    dropped_noisy_clv = len({h.detector for h in hits
+                             if _exclude(h) == "noisy"})
+    hits = [h for h in hits if _exclude(h) is None]
 
     distinct = sorted({h.detector for h in hits})
     n = len(distinct)
@@ -685,16 +699,18 @@ def classify_signal(hits: list[AnomalyHit]) -> tuple[str, dict]:
         "agreement": round(agreement, 2),
         "side": agreed_side,
         "dropped_untrusted_model_gap": dropped_untrusted,
+        "dropped_noisy_clv": dropped_noisy_clv,
     }
 
     if not settings.signal_gate_enabled:
         meta["confidence"] = "signal"
         return "signal", meta
 
+    # mean_mult в meta — только для прозрачности (/weights-стиль),
+    # НЕ гейт: CLV уже учтён в score через compute_score.
     is_signal = (
         n >= settings.signal_min_detectors
         and score >= settings.signal_score_threshold
-        and mean_mult >= settings.signal_min_clv_multiplier
         # направление подтверждено ≥N РАЗНЫМИ детекторами, не одним
         and side_detectors >= settings.signal_min_directional
         and agreement >= settings.signal_min_agreement

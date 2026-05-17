@@ -261,6 +261,9 @@ def _format_gate_line(meta: dict | None) -> str:
     dropped = meta.get("dropped_untrusted_model_gap", 0)
     if dropped:
         parts.append(f"⚠️ отсеян model_gap×{dropped} (ненадёжная лига)")
+    noisy = meta.get("dropped_noisy_clv", 0)
+    if noisy:
+        parts.append(f"⚠️ отсеяно ×{noisy} (CLV-шум, множитель на полу)")
     return " · ".join(parts)
 
 

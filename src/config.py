@@ -76,7 +76,10 @@ class Settings(BaseSettings):
     signal_gate_enabled: bool = True
     signal_min_detectors: int = 2          # разных alert-детекторов в кластере
     signal_score_threshold: float = 4.0    # CLV-взвешенный compute_score
-    signal_min_clv_multiplier: float = 1.0  # ср. CLV-множитель сработавших
+    signal_min_clv_multiplier: float = 1.0  # DEPRECATED (P2): больше НЕ гейт.
+    # Прежний mean_mult≥порога дважды учитывал CLV и щёлкал в «нет сигналов»
+    # при созревании CLV. Теперь шумный детектор исключается по полу клампа
+    # (clv_calibration_min_multiplier). Поле оставлено для совместимости .env.
     signal_min_agreement: float = 0.55     # доля лидирующего исхода (направление)
     signal_min_directional: int = 2        # ≥N РАЗНЫХ направленных детекторов за сторону
 

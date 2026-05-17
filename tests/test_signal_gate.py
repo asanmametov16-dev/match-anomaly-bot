@@ -75,14 +75,36 @@ def test_conflicting_directions_weak():
     assert label == "weak"  # < signal_min_agreement (0.55)
 
 
-def test_clv_downweighted_detectors_blocked(monkeypatch):
-    """Счёт ≥ порога, но детекторы исторически CLV-слабые → не сигнал."""
-    monkeypatch.setitem(calib._multipliers, "sharp_move", 0.5)
-    hits = [_home("synchronized"), _home("sharp_move")]
-    # score = 3*1.0 + 2*0.5 = 4.0 ≥ 4, но mean_mult = 0.75 < 1.0
+def test_clv_downweighted_not_excluded_only_scaled(monkeypatch):
+    """P2: просто пониженный (не на полу) множитель НЕ исключает детектор —
+    CLV влияет только через compute_score, отдельного mean-гейта нет."""
+    monkeypatch.setattr(det.settings, "signal_min_detectors", 2)
+    monkeypatch.setattr(det.settings, "signal_score_threshold", 4.0)
+    monkeypatch.setattr(det.settings, "signal_min_directional", 2)
+    monkeypatch.setattr(det.settings, "signal_min_agreement", 0.5)
+    monkeypatch.setitem(calib._multipliers, "sharp_move", 0.5)  # >0.3 пол
+    hits = [_home("synchronized"), _home("sharp_move"), _home("drift")]
+    # score = 3*1.0 + 2*0.5 + 2*1.0 = 6.0 ≥ 4; sharp_move НЕ на полу
     label, meta = classify_signal(hits)
-    assert meta["score"] == pytest.approx(4.0)
-    assert meta["mean_clv_mult"] == pytest.approx(0.75)
+    assert meta["score"] == pytest.approx(6.0)
+    assert meta["dropped_noisy_clv"] == 0
+    assert label == "signal"
+
+
+def test_clv_floored_detector_excluded_from_decision(monkeypatch):
+    """P2: детектор с множителем НА ПОЛУ клампа (доказанный шум)
+    исключается из решения, как unreliable model_gap."""
+    monkeypatch.setattr(det.settings, "signal_min_detectors", 1)
+    monkeypatch.setattr(det.settings, "signal_score_threshold", 0.0)
+    monkeypatch.setattr(det.settings, "signal_min_directional", 2)
+    monkeypatch.setattr(det.settings, "signal_min_agreement", 0.5)
+    # пол по умолчанию = clv_calibration_min_multiplier (0.3)
+    monkeypatch.setitem(calib._multipliers, "sharp_move", 0.3)
+    hits = [_home("sharp_move"), _home("drift")]
+    label, meta = classify_signal(hits)
+    assert meta["dropped_noisy_clv"] == 1          # sharp_move отсеян
+    assert meta["n_directional"] == 1              # остался только drift
+    # без отсева было бы 2 направленных → signal; с отсевом 1 < 2 → weak
     assert label == "weak"
 
 
