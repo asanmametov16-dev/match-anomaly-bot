@@ -15,10 +15,10 @@ log = logging.getLogger(__name__)
 
 # Букмекеры, которые считаются «острыми» (sharp): они двигают рынок первыми
 # и отражают «умные деньги». Если их коэф. заметно ниже soft-контор — сигнал.
-SHARP_BOOKMAKERS: frozenset[str] = frozenset({
-    "pinnacle", "betfair_ex_eu", "betfair_ex_uk", "betfair",
-    "matchbook", "smarkets", "lowvig", "betcris",
-})
+# «Sharp»-конторы — ЕДИНЫЙ источник правды: settings.sharp_bookmakers
+# (config.py / .env). Используется consensus-весами, synchronized,
+# sharp_consensus И sharp_move — раньше у sharp_move был отдельный
+# хардкод-набор, из-за чего один бот имел две противоречивые модели рынка.
 
 # Веса детекторов для итогового счёта подозрительности.
 # synchronized и sharp_move — самые надёжные сигналы «умных денег».
@@ -307,24 +307,43 @@ def detect_synchronized(session: Session, match: MatchOdds) -> list[AnomalyHit]:
 
 
 # --- Детектор 4: расхождение с моделью --------------------------------------
+def _normalize(p: dict[str, float]) -> dict[str, float] | None:
+    """Нормировать вероятности в сумму 1.0. None, если сумма ≤ 0."""
+    s = sum(v for v in p.values() if v and v > 0.0)
+    if s <= 0.0:
+        return None
+    return {k: (v / s if v and v > 0.0 else 0.0) for k, v in p.items()}
+
+
 def detect_model_gap(session: Session, match: MatchOdds,
-                     current_medians: dict[str, float | None],
+                     market_probs: dict[str, float | None] | None,
                      xg_pred: "XgPrediction | None" = None) -> list[AnomalyHit]:
-    """Сравнивает рыночные коэффициенты с 'честными' от модели.
+    """Расхождение МАРЖА-FREE рыночной вероятности с вероятностью модели.
+
+    Сравниваем вероятности, а не коэффициенты: `market_probs` — это
+    маржа-free консенсус (`consensus_probabilities`), модель тоже в
+    вероятностях и нормируется в сумму 1. Раньше сравнивались честные
+    коэф. модели с СЫРОЙ медианой рынка (с маржой) — нормально-
+    маржинальная контора давала ложный gap ≈ overround. Метрика
+    относительная (|p_market−p_model|/p_model), масштаб совпадает с
+    прежним порогом по коэф. payload market/fair хранятся как коэф.
+    (1/p) — extract_bet_side/CLV ожидают «market>fair = value».
 
     Приоритет референс-модели (точность убывает):
       1. xg_pred (sstats.net winProb)          → source "sstats_xg"
       2. маржа-free консенсус sharp-контор      → source "sharp_consensus"
       3. Elo (холодный старт, шумит 1-2 недели) → source "elo"
-    Источник сохраняется в payload["source"].
     """
     from .probability import sharp_consensus_probabilities
     from .sstats_history import league_model_trust
 
+    if not market_probs:
+        return []
+
     if xg_pred is not None:
-        fair_home = 1.0 / max(xg_pred.home_win_prob, 0.01)
-        fair_draw = 1.0 / max(xg_pred.draw_prob, 0.01)
-        fair_away = 1.0 / max(xg_pred.away_win_prob, 0.01)
+        model = _normalize({"home": xg_pred.home_win_prob,
+                            "draw": xg_pred.draw_prob,
+                            "away": xg_pred.away_win_prob})
         source = "sstats_xg"
         model_info: dict = {
             "home_xg": xg_pred.home_xg,
@@ -336,9 +355,7 @@ def detect_model_gap(session: Session, match: MatchOdds,
         }
     elif (sharp := sharp_consensus_probabilities(
             match, settings.model_gap_min_sharp_books)) is not None:
-        fair_home = 1.0 / max(sharp["home"], 0.01)
-        fair_draw = 1.0 / max(sharp["draw"], 0.01)
-        fair_away = 1.0 / max(sharp["away"], 0.01)
+        model = _normalize(sharp)  # sharp-медианы по исходам НЕ суммируются в 1
         source = "sharp_consensus"
         model_info = {
             "sharp_p_home": sharp["home"],
@@ -349,33 +366,40 @@ def detect_model_gap(session: Session, match: MatchOdds,
         rating_home = get_rating(session, match.home_team)
         rating_away = get_rating(session, match.away_team)
         fair = fair_odds_1x2(rating_home, rating_away)
-        fair_home, fair_draw, fair_away = fair.home, fair.draw, fair.away
+        model = _normalize({"home": 1.0 / fair.home,
+                            "draw": 1.0 / fair.draw,
+                            "away": 1.0 / fair.away})
         source = "elo"
         model_info = {"rating_home": rating_home, "rating_away": rating_away}
+
+    if model is None:
+        return []
 
     multiplier, bucket_label = _time_bucket_info(match)
     threshold = settings.model_gap_threshold * multiplier
 
     hits: list[AnomalyHit] = []
-    pairs = [
-        ("home", fair_home, current_medians.get("home")),
-        ("draw", fair_draw, current_medians.get("draw")),
-        ("away", fair_away, current_medians.get("away")),
-    ]
-    for outcome, fair_price, market in pairs:
-        if market is None or market <= 1.0:
+    for outcome in ("home", "draw", "away"):
+        p_model = model.get(outcome, 0.0)
+        p_market = market_probs.get(outcome)
+        if p_market is None or p_market <= 0.0 or p_model <= 0.0:
             continue
-        gap = abs(market - fair_price) / fair_price
+        gap = abs(p_market - p_model) / p_model
         if gap >= threshold:
+            market_odds = 1.0 / p_market
+            fair_odds = 1.0 / p_model
             hits.append(AnomalyHit(
                 detector="model_gap",
                 severity=gap,
                 description=(
                     f"Расхождение с моделью ({source}) по {outcome}: "
-                    f"рынок {market:.2f}, модель {fair_price:.2f} "
+                    f"рынок {p_market*100:.1f}% ({market_odds:.2f}), "
+                    f"модель {p_model*100:.1f}% ({fair_odds:.2f}) "
                     f"({gap*100:.1f}%) [корзина {bucket_label}, эфф. {threshold*100:.0f}%]"
                 ),
-                payload={"outcome": outcome, "market": market, "fair": fair_price,
+                payload={"outcome": outcome,
+                         "market": market_odds, "fair": fair_odds,
+                         "market_prob": p_market, "model_prob": p_model,
                          "source": source, "bucket_label": bucket_label,
                          **model_info},
             ))
@@ -409,7 +433,9 @@ def detect_sharp_move(match: MatchOdds) -> list[AnomalyHit]:
     значительно вероятнее, чем soft-книги — это сигнал «умных денег».
     """
     hits: list[AnomalyHit] = []
-    threshold = settings.sharp_move_threshold  # минимальная разница в вероятности (3pp по умолч.)
+    threshold = settings.sharp_move_threshold  # минимальная разница в вероятности
+    sharp_set = {b.lower() for b in settings.sharp_bookmakers}
+    min_sharp = settings.sharp_move_min_sharp_books
 
     for outcome in ("home", "draw", "away"):
         sharp_probs: list[tuple[str, float]] = []
@@ -419,12 +445,13 @@ def detect_sharp_move(match: MatchOdds) -> list[AnomalyHit]:
             prob = _margin_normalized_prob(bm, outcome)
             if prob is None:
                 continue
-            if bm.bookmaker.lower() in SHARP_BOOKMAKERS:
+            if bm.bookmaker.lower() in sharp_set:
                 sharp_probs.append((bm.bookmaker, prob))
             else:
                 soft_probs.append((bm.bookmaker, prob))
 
-        if not sharp_probs or len(soft_probs) < 2:
+        # Медиана из одной sharp-конторы — шум; нужен кворум sharp + ≥2 soft.
+        if len(sharp_probs) < min_sharp or len(soft_probs) < 2:
             continue
 
         sharp_med = statistics.median([p for _, p in sharp_probs])

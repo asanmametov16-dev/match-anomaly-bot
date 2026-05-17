@@ -69,9 +69,9 @@ def test_uses_sharp_consensus_when_no_xg(session):
         _bm("betfair_ex_eu", 2.00, 3.60, 4.00),
         _bm("bk_soft", 2.05, 3.55, 3.95),
     ])
-    # sharp fair_home ≈ 2.0; рынок 4.0 → gap ≈ 100% >> 20%
-    medians = {"home": 4.0, "draw": 3.6, "away": 2.0}
-    hits = detect_model_gap(session, m, medians, xg_pred=None)
+    # sharp p_home ≈ 0.487; рынок p_home=0.20 → gap ≈ 59% >> 20%
+    market_probs = {"home": 0.20, "draw": 0.30, "away": 0.50}
+    hits = detect_model_gap(session, m, market_probs, xg_pred=None)
     assert hits
     for h in hits:
         assert h.payload["source"] == "sharp_consensus"
@@ -84,8 +84,8 @@ def test_uses_sharp_consensus_when_no_xg(session):
 
 def test_falls_back_to_elo_without_sharp_books(session):
     m = _match([_bm("bk1", 4.5, 3.5, 1.8), _bm("bk2", 4.4, 3.6, 1.82)])
-    medians = {"home": 4.5, "draw": 3.5, "away": 1.8}
-    hits = detect_model_gap(session, m, medians, xg_pred=None)
+    market_probs = {"home": 0.55, "draw": 0.25, "away": 0.20}
+    hits = detect_model_gap(session, m, market_probs, xg_pred=None)
     assert hits, "Без sharp-контор ожидаем Elo-путь со срабатыванием"
     for h in hits:
         assert h.payload["source"] == "elo"
@@ -103,8 +103,8 @@ def test_xg_takes_priority_over_sharp(session):
         home_win_prob=0.50, draw_prob=0.25, away_win_prob=0.25,
         home_glicko=1550.0, away_glicko=1500.0,
     )
-    medians = {"home": 4.0, "draw": 3.5, "away": 2.0}
-    hits = detect_model_gap(session, m, medians, xg_pred=pred)
+    market_probs = {"home": 0.20, "draw": 0.30, "away": 0.50}
+    hits = detect_model_gap(session, m, market_probs, xg_pred=pred)
     assert hits
     for h in hits:
         assert h.payload["source"] == "sstats_xg"

@@ -92,8 +92,8 @@ def test_model_gap_stamps_league_and_trust(session, monkeypatch):
         home_glicko=1550.0, away_glicko=1500.0,
         league="England — Premier League",
     )
-    medians = {"home": 4.0, "draw": 3.5, "away": 2.0}
-    hits = detect_model_gap(session, _match(), medians, xg_pred=pred)
+    market_probs = {"home": 0.20, "draw": 0.30, "away": 0.50}
+    hits = detect_model_gap(session, _match(), market_probs, xg_pred=pred)
     assert hits
     for h in hits:
         assert h.payload["league"] == "England — Premier League"

@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     cross_market_pp_threshold: float = 4.0  # h2h-DNB vs AH-0.0, проц. пункты
     cross_market_min_books: int = 3         # минимум контор с форой 0.0
     sharp_move_threshold: float = 0.05    # разрыв sharp vs soft (5%)
+    sharp_move_min_sharp_books: int = 2   # минимум sharp-контор (медиана из 1 — шум)
 
     # Веса букмекеров: sharp-конторы первыми двигают рынок и отражают «умные деньги»
     sharp_bookmakers: list[str] = ["pinnacle", "betfair_ex_eu", "betfair_ex_uk",

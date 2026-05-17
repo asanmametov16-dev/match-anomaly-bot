@@ -43,10 +43,10 @@ def _match() -> MatchOdds:
 
 def test_falls_back_to_elo_when_no_xg(session):
     match = _match()
-    # С Elo=1500 у обоих fair_home ≈ 2.38. Сильное отклонение market'а:
-    # home=4.5 → gap = |4.5-2.38|/2.38 ≈ 89% >> threshold 20%
-    medians = {"home": 4.5, "draw": 3.5, "away": 1.8}
-    hits = detect_model_gap(session, match, medians, xg_pred=None)
+    # Elo=1500/1500 → модель ≈ home/away ~0.35, draw ~0.30 (норм.).
+    # Рынок сильно смещён: p_home=0.20 → gap=|0.20-0.35|/0.35 ≈ 43% >> 20%
+    market_probs = {"home": 0.20, "draw": 0.25, "away": 0.55}
+    hits = detect_model_gap(session, match, market_probs, xg_pred=None)
     assert hits, "Без xG ожидаем срабатывание на дефолтных Elo при сильном отклонении"
     for h in hits:
         assert h.payload["source"] == "elo"
@@ -60,18 +60,15 @@ def test_falls_back_to_elo_when_no_xg(session):
 
 def test_uses_sstats_xg_when_provided(session):
     match = _match()
-    # xG-модель говорит home_win=0.50, away=0.25, draw=0.25
-    # → fair_home=2.0, fair_draw=4.0, fair_away=4.0
-    # market: home=4.0, draw=3.5, away=2.0
-    # gap на home: |4.0-2.0|/2.0 = 100% → srабатывает
-    # gap на away: |2.0-4.0|/4.0 = 50% → срабатывает
+    # xG-модель: home=0.50, draw=0.25, away=0.25 (уже сумма 1).
+    # Рынок: home=0.20 → gap=|0.20-0.50|/0.50 = 60% → срабатывает.
     pred = XgPrediction(
         home_xg=1.5, away_xg=1.0,
         home_win_prob=0.50, draw_prob=0.25, away_win_prob=0.25,
         home_glicko=1550.0, away_glicko=1500.0,
     )
-    medians = {"home": 4.0, "draw": 3.5, "away": 2.0}
-    hits = detect_model_gap(session, match, medians, xg_pred=pred)
+    market_probs = {"home": 0.20, "draw": 0.25, "away": 0.55}
+    hits = detect_model_gap(session, match, market_probs, xg_pred=pred)
     assert hits, "С xG-предсказанием должны быть срабатывания"
     for h in hits:
         assert h.payload["source"] == "sstats_xg"
@@ -85,24 +82,25 @@ def test_uses_sstats_xg_when_provided(session):
 # ---------------------------------------------------------------------------
 
 def test_xg_fair_odds_math(session):
-    """fair_home должен быть 1/home_win_prob, fair_away 1/away_win_prob."""
+    """payload['fair'] = 1/p_model; gap считается в простр. вероятностей."""
     match = _match()
     pred = XgPrediction(
         home_xg=2.0, away_xg=0.5,
         home_win_prob=0.625, draw_prob=0.20, away_win_prob=0.175,
         home_glicko=1700.0, away_glicko=1400.0,
     )
-    # Market точно равен fair → gap = 0 → ничего не сработает (threshold = 0.20)
-    medians = {"home": 1.60, "draw": 5.0, "away": 5.714}  # = 1/0.625, 1/0.20, 1/0.175
-    hits = detect_model_gap(session, match, medians, xg_pred=pred)
-    assert hits == [], "Когда market == fair, gap=0, не срабатывает"
+    # Рынок точно равен модели → gap = 0 → ничего (threshold = 0.20)
+    market_probs = {"home": 0.625, "draw": 0.20, "away": 0.175}
+    hits = detect_model_gap(session, match, market_probs, xg_pred=pred)
+    assert hits == [], "Когда market == model, gap=0, не срабатывает"
 
-    # Сдвинем market home на 30% выше fair → должно сработать
-    medians["home"] = 1.60 * 1.30  # = 2.08
-    hits = detect_model_gap(session, match, medians, xg_pred=pred)
+    # Сдвинем p_market_home на 28% ниже модели → должно сработать
+    market_probs["home"] = 0.45  # |0.45-0.625|/0.625 ≈ 0.28 ≥ 0.20
+    hits = detect_model_gap(session, match, market_probs, xg_pred=pred)
     home_hits = [h for h in hits if h.payload["outcome"] == "home"]
-    assert home_hits, "30% gap должен сработать"
+    assert home_hits, "28% gap должен сработать"
     assert home_hits[0].payload["fair"] == pytest.approx(1.60, abs=0.01)
+    assert home_hits[0].payload["model_prob"] == pytest.approx(0.625, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -117,8 +115,8 @@ def test_xg_zero_probability_handled(session):
         home_win_prob=0.0, draw_prob=0.0, away_win_prob=1.0,  # вырожденный случай
         home_glicko=1500, away_glicko=1500,
     )
-    medians = {"home": 5.0, "draw": 5.0, "away": 5.0}
-    # Не должно крашнуться (clamp 0.01 → fair max 100.0)
-    hits = detect_model_gap(session, match, medians, xg_pred=pred)
+    market_probs = {"home": 0.33, "draw": 0.33, "away": 0.34}
+    # Не должно крашнуться: p_model_home=0 → исход home пропускается
+    hits = detect_model_gap(session, match, market_probs, xg_pred=pred)
     # Результат не важен, важно что нет ZeroDivisionError
     assert isinstance(hits, list)

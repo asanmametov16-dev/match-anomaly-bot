@@ -69,9 +69,10 @@ def test_weighted_median_single_value():
 
 
 def test_weighted_median_two_equal_weight_values():
-    """With two values of equal weight, result is the first (lower) one."""
+    """Two equal-weight values → average of the two (like an even-sample
+    median), not the lower one (that was a downward-bias bug)."""
     result = _weighted_median([0.40, 0.60], [1.0, 1.0])
-    assert abs(result - 0.40) < 1e-9
+    assert abs(result - 0.50) < 1e-9
 
 
 # --- consensus_probabilities with weights ------------------------------------

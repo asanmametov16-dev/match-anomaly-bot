@@ -128,11 +128,18 @@ def _weighted_median(values: list[float], weights: list[float]) -> float:
     """
     paired = sorted(zip(values, weights), key=lambda x: x[0])
     total = sum(weights)
+    half = total / 2.0
     cumulative = 0.0
-    for val, w in paired:
+    for i, (val, w) in enumerate(paired):
         cumulative += w
-        if cumulative >= total / 2:
+        if cumulative > half:
             return val
+        if cumulative == half:
+            # Точно середина (чётный суммарный вес): усредняем два
+            # центральных значения, как обычная медиана чётной выборки.
+            # Старый код возвращал нижнее → системный сдвиг консенсуса вниз.
+            nxt = paired[i + 1][0] if i + 1 < len(paired) else val
+            return (val + nxt) / 2.0
     return paired[-1][0]
 
 

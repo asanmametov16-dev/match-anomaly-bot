@@ -15,6 +15,7 @@ from .detectors import (ALERT_DETECTORS, AnomalyHit, classify_signal,
                         _median)
 from .notifier import send_alert
 from .odds_client import MatchOdds, fetch_odds
+from .probability import consensus_probabilities
 from .sstats_client import fetch_xg_batch
 
 log = logging.getLogger(__name__)
@@ -130,6 +131,9 @@ async def run_once() -> None:
                 "draw": _median(b.draw for b in match.bookmakers),
                 "away": _median(b.away for b in match.bookmakers),
             }
+            # model_gap сравнивает модель с МАРЖА-FREE рынком, а не с
+            # сырой медианой коэф. (та несёт overround → ложный gap).
+            market_probs = consensus_probabilities(match)
 
             # Детектируем — порядок важен: drift и synchronized сравнивают с
             # прошлым снимком, поэтому сохранение делаем ПОСЛЕ детекта.
@@ -137,7 +141,7 @@ async def run_once() -> None:
             hits += detect_spread(match)
             hits += detect_drift(session, match)
             hits += detect_synchronized(session, match)
-            hits += detect_model_gap(session, match, medians,
+            hits += detect_model_gap(session, match, market_probs,
                                      xg_pred=xg_predictions.get(match.match_id))
             hits += detect_sharp_move(match)
             hits += detect_exotic_spread(match)
