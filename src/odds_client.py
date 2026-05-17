@@ -7,11 +7,19 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+import asyncio
 from typing import Any
 
 import httpx
 
 from .config import settings
+
+# httpx float-таймаут ПЕР-ФАЗНЫЙ, общего дедлайна у httpx нет: зависший
+# после заголовков ответ висит вечно (как было у sstats). Гранулярный
+# httpx.Timeout + ЖЁСТКИЙ общий потолок через asyncio.wait_for. Хэнг
+# здесь морозил бы ВЕСЬ цикл опроса (и стартовый run_once).
+_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=5.0)
+_TOTAL_DEADLINE = 25.0
 
 log = logging.getLogger(__name__)
 
@@ -103,8 +111,11 @@ async def fetch_odds() -> list[MatchOdds]:
         "dateFormat": "iso",
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url, params=params)
+    async with httpx.AsyncClient() as client:
+        response = await asyncio.wait_for(
+            client.get(url, params=params, timeout=_HTTP_TIMEOUT),
+            timeout=_TOTAL_DEADLINE,
+        )
         response.raise_for_status()
         data = response.json()
 

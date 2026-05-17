@@ -13,11 +13,18 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+import asyncio
 from typing import Any
 
 import httpx
 
 from .config import settings
+
+# httpx float-таймаут пер-фазный, общего дедлайна нет → зависший ответ
+# висит вечно. football-data — ПЕРВЫЙ фетч в check_anomaly_results (до
+# sstats-гарда), его хэнг блокировал бы весь резолв результатов.
+_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=5.0)
+_TOTAL_DEADLINE = 25.0
 
 log = logging.getLogger(__name__)
 
@@ -56,12 +63,16 @@ async def fetch_finished_matches(days_back: int = 2) -> list[FinishedMatch]:
     }
     headers = {"X-Auth-Token": settings.football_data_key}
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(url, params=params, headers=headers)
+            response = await asyncio.wait_for(
+                client.get(url, params=params, headers=headers,
+                           timeout=_HTTP_TIMEOUT),
+                timeout=_TOTAL_DEADLINE,
+            )
             response.raise_for_status()
-        except httpx.HTTPError as e:
-            log.error("football-data.org: ошибка запроса: %s", e)
+        except (httpx.HTTPError, asyncio.TimeoutError) as e:
+            log.error("football-data.org: ошибка/таймаут запроса: %s", e)
             return []
         data = response.json()
 

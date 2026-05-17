@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .clv import extract_bet_side
@@ -33,14 +33,24 @@ def _fuzzy_find_result(
     """Нечёткий поиск результата по именам команд и дате.
 
     Точный поиск по ключу ломается при любом расхождении имён между API.
-    Загружаем все MatchResult (таблица маленькая — сотни строк), фильтруем
-    по дате ±1 день и выбираем запись с наибольшим средним сходством имён.
+    Берём только записи с датой ±1 день (фильтр В SQL по префиксу
+    result_key 'YYYY-MM-DD|...') и выбираем запись с наибольшим средним
+    сходством имён. Раньше грузили ВСЮ таблицу и гоняли SequenceMatcher
+    по каждой строке — match_results уже 7600+ и растёт каждый час
+    (dual-source) → синхронный O(matches×results) внутри async-джоба
+    блокировал event-loop всё сильнее. Фильтр по дате срезает выборку
+    до десятков строк той же даты, поведение идентично.
     """
     norm_home = normalize_team_name(home)
     norm_away = normalize_team_name(away)
     match_date = commence_time.date()
 
-    all_results = session.execute(select(MatchResult)).scalars().all()
+    prefixes = [(match_date + timedelta(days=d)).isoformat()
+                for d in (-1, 0, 1)]
+    all_results = session.execute(
+        select(MatchResult).where(
+            or_(*[MatchResult.result_key.like(f"{p}|%") for p in prefixes]))
+    ).scalars().all()
 
     best_score = 0.0
     best_result: MatchResult | None = None
