@@ -45,6 +45,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "🤖 Anomaly bot активен.\n\n"
         "Команды:\n"
         "/stats — общая статистика\n"
+        "/signals — только алерты (сильные сигналы): подтв./не подтв.\n"
         "/accuracy — точность детекторов\n"
         "/clv — closing line value по детекторам\n"
         "/calibration — точность вероятностей (Brier)\n"
@@ -154,6 +155,73 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"  ❓ Нет результата (лига не в БД): <b>{no_result}</b>",
     ]
 
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def cmd_signals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Только АЛЕРТЫ (сильные сигналы, прошедшие precision-gate): сколько
+    было, сколько подтвердилось/не подтвердилось. Общая сводка — /stats."""
+    if not _is_authorized(update):
+        return
+    from .result_checker import _result_key
+
+    with SessionLocal() as session:
+        sig_anoms = session.execute(
+            select(Anomaly.home_team, Anomaly.away_team,
+                   Anomaly.commence_time, Anomaly.detected_at)
+            .where(func.json_extract(Anomaly.payload, "$.signal_confidence")
+                   == "signal")
+        ).all()
+        since24 = (datetime.now(timezone.utc).replace(tzinfo=None)
+                   - timedelta(hours=24))
+        sig_keys: set[str] = set()
+        sig_keys_24h: set[str] = set()
+        for h, a, ct, det_at in sig_anoms:
+            k = _result_key(h, a, ct)
+            sig_keys.add(k)
+            if det_at and det_at >= since24:
+                sig_keys_24h.add(k)
+        n_signals = len(sig_keys)
+
+        outcomes = session.execute(select(AnomalyOutcome)).scalars().all()
+        by_match: dict[str, list] = {}
+        for o in outcomes:
+            if o.result_key in sig_keys:
+                by_match.setdefault(o.result_key, []).append(o.confirmed)
+
+        confirmed = not_confirmed = no_direction = 0
+        for confirmeds in by_match.values():
+            directional = [c for c in confirmeds if c is not None]
+            if not directional:
+                no_direction += 1
+            elif sum(1 for c in directional if c == 1) > len(directional) / 2:
+                confirmed += 1
+            else:
+                not_confirmed += 1
+
+        resolved = confirmed + not_confirmed + no_direction
+        pending = n_signals - resolved
+
+    if n_signals == 0:
+        await update.message.reply_text(
+            "📡 <b>Сигналы (алерты)</b>\n\nПока ни одного сигнала не было.",
+            parse_mode=ParseMode.HTML)
+        return
+
+    decided = confirmed + not_confirmed
+    acc = f"{confirmed / decided * 100:.0f}%" if decided else "—"
+    lines = [
+        "📡 <b>Сигналы (алерты)</b>",
+        f"Всего сигналов: <b>{n_signals}</b>  ·  за 24ч: {len(sig_keys_24h)}",
+        "",
+        f"  ✅ Подтвердилось: <b>{confirmed}</b>",
+        f"  ❌ Не подтвердилось: <b>{not_confirmed}</b>",
+        f"  ⏳ Ждут результата: <b>{pending}</b>",
+        "",
+        f"Точность (по сыгранным): <b>{acc}</b>",
+    ]
+    if no_direction:
+        lines.append(f"<i>без направления: {no_direction}</i>")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
@@ -478,6 +546,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("signals", cmd_signals))
     app.add_handler(CommandHandler("accuracy", cmd_accuracy))
     app.add_handler(CommandHandler("clv", cmd_clv))
     app.add_handler(CommandHandler("calibration", cmd_calibration))
